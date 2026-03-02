@@ -1,0 +1,1646 @@
+# --- TEMPORARY RECORDING (DO NOT DELETE) ---
+ARQUIVO_TEMP="/tmp/audit_resultado_temp.txt"
+exec > >(tee "$ARQUIVO_TEMP") 2>&1
+# ----------------------------------------
+
+echo "================================================================="
+echo "   CIS SECURITY AUDIT - DEBIAN 12                                "
+echo "================================================================="
+echo ""
+
+PASSED=0
+FAILED=0
+MANUAL=0
+
+# Função central para imprimir os resultados
+print_result() {
+    local status=$1
+    local cis_id=$2
+    local desc=$3
+    if [ "$status" == "PASS" ]; then
+        echo -e "[\033[32mPASSED\033[0m] CIS $cis_id : $desc"
+        ((PASSED++))
+    elif [ "$status" == "FAIL" ]; then
+        echo -e "[\033[31mFAILED\033[0m] CIS $cis_id : $desc"
+        ((FAILED++))
+    elif [ "$status" == "MANUAL" ] || [ "$status" == "N/A" ]; then
+        echo -e "[\033[33m$status\033[0m] CIS $cis_id : $desc"
+        ((MANUAL++))
+    fi
+}
+
+# --- FUNÇÕES TÉCNICAS (Alinhadas com a coluna "Audit Procedure") ---
+check_module() {
+    local mod=$1
+    local id=$2
+    local desc=$3
+
+    # O módulo overlayfs é carregado no kernel apenas como "overlay"
+    local real_mod=$mod
+    if [ "$mod" == "overlayfs" ]; then real_mod="overlay"; fi
+
+    # Verifica primeiro se está ativo na memória (se estiver, chumba logo)
+    if lsmod | grep -q "^$real_mod\b"; then
+        print_result "FAIL" "$id" "$desc"
+    # Se não estiver ativo, verifica se está na blacklist ou forçado para /bin/false (ou true)
+    elif modprobe --showconfig 2>/dev/null | grep -Pq -- "\b(install|blacklist)\h+${real_mod//-/_}\b"; then
+        print_result "PASS" "$id" "$desc"
+    else
+        print_result "FAIL" "$id" "$desc"
+    fi
+}
+
+check_mount() {
+    # Alinhado com Audit Procedure: "findmnt -kn <partition>"
+    if findmnt -kn "$1" >/dev/null 2>&1; then
+        print_result "PASS" "$2" "$3"
+    else
+        print_result "FAIL" "$2" "$3"
+    fi
+}
+
+check_mount_opt() {
+    # Alinhado com Audit Procedure: "findmnt -kn <partition> | grep -v <option>"
+    if findmnt -kn "$1" | grep -qw "$2"; then
+        print_result "PASS" "$3" "$4"
+    else
+        print_result "FAIL" "$3" "$4"
+    fi
+}
+
+# ==========================================
+# SECTION 1: INITIAL SETUP
+# ==========================================
+echo -e "\n--- Section 1: Initial Setup ---"
+
+# 1.1.1 Filesystem Kernel Modules
+check_module "cramfs"       "1.1.1.1"  "Ensure cramfs kernel module is not available"
+check_module "freevxfs"     "1.1.1.2"  "Ensure freevxfs kernel module is not available"
+check_module "hfs"          "1.1.1.3"  "Ensure hfs kernel module is not available"
+check_module "hfsplus"      "1.1.1.4"  "Ensure hfsplus kernel module is not available"
+check_module "jffs2"        "1.1.1.5"  "Ensure jffs2 kernel module is not available"
+check_module "overlayfs"    "1.1.1.6"  "Ensure overlayfs kernel module is not available"
+check_module "squashfs"     "1.1.1.7"  "Ensure squashfs kernel module is not available"
+check_module "udf"          "1.1.1.8"  "Ensure udf kernel module is not available"
+# 1.1.1.9 Ensure usb-storage kernel module is not available
+if modprobe --showconfig 2>/dev/null | grep -Pq '^\s*install\s+usb[-_]storage\s+/bin/(true|false)\b' && \
+   modprobe --showconfig 2>/dev/null | grep -Pq '^\s*blacklist\s+usb[-_]storage\b' && \
+   ! lsmod 2>/dev/null | grep -q "^usb_storage\b"; then
+    print_result "PASS" "1.1.1.9" "Ensure usb-storage kernel module is not available"
+else
+    print_result "FAIL" "1.1.1.9" "Ensure usb-storage kernel module is not available"
+fi
+print_result "MANUAL"       "1.1.1.10" "Ensure unused filesystems kernel modules are not available"
+
+# 1.1.2 /tmp Partition
+check_mount "/tmp"              "1.1.2.1.1" "Ensure /tmp is a separate partition"
+check_mount_opt "/tmp" "nodev"  "1.1.2.1.2" "Ensure nodev option set on /tmp partition"
+check_mount_opt "/tmp" "nosuid" "1.1.2.1.3" "Ensure nosuid option set on /tmp partition"
+check_mount_opt "temp" "noexec" "1.1.2.1.4" "Ensure noexec option set on /temp partition"
+
+# 1.1.2.2 /dev/shm Partition
+check_mount "/dev/shm"              "1.1.2.2.1" "Ensure /dev/shm is a separate partition"
+check_mount_opt "/dev/shm" "nodev"  "1.1.2.2.2" "Ensure nodev option set on /dev/shm partition"
+check_mount_opt "/dev/shm" "nosuid" "1.1.2.2.3" "Ensure nosuid option set on /dev/shm partition"
+check_mount_opt "/dev/shm" "noexec" "1.1.2.2.4" "Ensure noexec option set on /dev/shm partition"
+
+# 1.1.2.3 /home Partition
+check_mount "/home"              "1.1.2.3.1" "Ensure separate partition exists for /home"
+check_mount_opt "/home" "nodev"  "1.1.2.3.2" "Ensure nodev option set on /home partition"
+check_mount_opt "/home" "nosuid" "1.1.2.3.3" "Ensure nosuid option set on /home partition"
+
+# 1.1.2.4 /var Partition
+check_mount "/var"              "1.1.2.4.1" "Ensure separate partition exists for /var"
+check_mount_opt "/var" "nodev"  "1.1.2.4.2" "Ensure nodev option set on /var partition"
+check_mount_opt "/var" "nosuid" "1.1.2.4.3" "Ensure nosuid option set on /var partition"
+
+# 1.1.2.5 /var/tmp Partition
+check_mount "/var/tmp"              "1.1.2.5.1" "Ensure separate partition exists for /var/tmp"
+check_mount_opt "/var/tmp" "nodev"  "1.1.2.5.2" "Ensure nodev option set on /var/tmp partition"
+check_mount_opt "/var/tmp" "nosuid" "1.1.2.5.3" "Ensure nosuid option set on /var/tmp partition"
+check_mount_opt "/var/tmp" "noexec" "1.1.2.5.4" "Ensure noexec option set on /var/tmp partition"
+
+# 1.1.2.6 /var/log Partition
+check_mount "/var/log"              "1.1.2.6.1" "Ensure separate partition exists for /var/log"
+check_mount_opt "/var/log" "nodev"  "1.1.2.6.2" "Ensure nodev option set on /var/log partition"
+check_mount_opt "/var/log" "nosuid" "1.1.2.6.3" "Ensure nosuid option set on /var/log partition"
+check_mount_opt "/var/log" "noexec" "1.1.2.6.4" "Ensure noexec option set on /var/log partition"
+
+# 1.1.2.7 /var/log/audit Partition
+check_mount "/var/log/audit"              "1.1.2.7.1" "Ensure separate partition exists for /var/log/audit"
+check_mount_opt "/var/log/audit" "nodev"  "1.1.2.7.2" "Ensure nodev option set on /var/log/audit partition"
+check_mount_opt "/var/log/audit" "nosuid" "1.1.2.7.3" "Ensure nosuid option set on /var/log/audit partition"
+check_mount_opt "/var/log/audit" "noexec" "1.1.2.7.4" "Ensure noexec option set on /var/log/audit partition"
+
+# 1.2 Package Management
+print_result "MANUAL" "1.2.1.1" "Ensure GPG keys are configured"
+print_result "MANUAL" "1.2.1.2" "Ensure package manager repositories are configured"
+print_result "MANUAL" "1.2.2.1" "Ensure updates, patches, and additional security software are installed"
+
+# 1.3 Mandatory Access Control (AppArmor)
+if dpkg -l | grep "^ii" | grep -qw "apparmor"; then print_result "PASS" "1.3.1.1" "Ensure AppArmor is installed"; else print_result "FAIL" "1.3.1.1" "Ensure AppArmor is installed"; fi
+if grep -q "apparmor=1" /boot/grub/grub.cfg 2>/dev/null; then print_result "PASS" "1.3.1.2" "Ensure AppArmor is enabled in the bootloader configuration"; else print_result "FAIL" "1.3.1.2" "Ensure AppArmor is enabled in the bootloader configuration"; fi
+print_result "MANUAL" "1.3.1.3" "Ensure all AppArmor Profiles are in enforce or complain mode"
+print_result "MANUAL" "1.3.1.4" "Ensure all AppArmor Profiles are enforcing"
+
+# ==========================================
+# SECTION 1: BOOTLOADER, PROCESS HARDENING AND BANNERS
+# ==========================================
+
+# 1.4 Bootloader
+if grep -q "^set superusers" /boot/grub/grub.cfg 2>/dev/null; then print_result "PASS" "1.4.1" "Ensure bootloader password is set"; else print_result "FAIL" "1.4.1" "Ensure bootloader password is set"; fi
+perm_boot=$(stat -c "%a" /boot/grub/grub.cfg 2>/dev/null)
+if [ "$perm_boot" == "600" ]; then print_result "PASS" "1.4.2" "Ensure access to bootloader config is configured"; else print_result "FAIL" "1.4.2" "Ensure access to bootloader config is configured"; fi
+
+# 1.5 Additional Process Hardening
+val_aslr=$(sysctl -n "kernel.randomize_va_space" 2>/dev/null)
+if [ "$val_aslr" == "2" ]; then print_result "PASS" "1.5.1" "Ensure address space layout randomization is enabled"; else print_result "FAIL" "1.5.1" "Ensure address space layout randomization is enabled"; fi
+print_result "MANUAL" "1.5.2" "Ensure ptrace_scope is restricted"
+print_result "MANUAL" "1.5.3" "Ensure core dumps are restricted"
+
+# 1.6 Banners
+if grep -q "restringido\|autorizados\|Authorized" /etc/motd 2>/dev/null; then print_result "PASS" "1.6.1" "Ensure message of the day is configured properly"; else print_result "FAIL" "1.6.1" "Ensure message of the day is configured properly"; fi
+if grep -q "restringido\|autorizados\|Authorized" /etc/issue 2>/dev/null; then print_result "PASS" "1.6.2" "Ensure local login warning banner is configured properly"; else print_result "FAIL" "1.6.2" "Ensure local login warning banner is configured properly"; fi
+if grep -q "restringido\|autorizados\|Authorized" /etc/issue.net 2>/dev/null; then print_result "PASS" "1.6.3" "Ensure remote login warning banner is configured properly"; else print_result "FAIL" "1.6.3" "Ensure remote login warning banner is configured properly"; fi
+
+perm_motd=$(stat -c "%a" /etc/motd 2>/dev/null)
+if [[ "$perm_motd" == "644" || -z "$perm_motd" ]]; then print_result "PASS" "1.6.4" "Ensure access to /etc/motd is configured"; else print_result "FAIL" "1.6.4" "Ensure access to /etc/motd is configured"; fi
+perm_iss=$(stat -c "%a" /etc/issue 2>/dev/null)
+if [[ "$perm_iss" == "644" || "$perm_iss" == "600" ]]; then print_result "PASS" "1.6.5" "Ensure access to /etc/issue is configured"; else print_result "FAIL" "1.6.5" "Ensure access to /etc/issue is configured"; fi
+perm_issnet=$(stat -c "%a" /etc/issue.net 2>/dev/null)
+if [[ "$perm_issnet" == "644" || "$perm_issnet" == "600" ]]; then print_result "PASS" "1.6.6" "Ensure access to /etc/issue.net is configured"; else print_result "FAIL" "1.6.6" "Ensure access to /etc/issue.net is configured"; fi
+
+# 1.7 GNOME Display Manager (GDM)
+if dpkg-query -s gdm3 &>/dev/null; then print_result "FAIL" "1.7.1" "Ensure GDM is removed"; else print_result "PASS" "1.7.1" "Ensure GDM is removed"; fi
+# Se o GDM foi removido (ou não está instalado), os controlos de configuração gráfica do GDM não se aplicam ao servidor.
+print_result "N/A" "1.7.2"  "Ensure GDM login banner is configured"
+print_result "N/A" "1.7.3"  "Ensure GDM disable-user-list option is enabled"
+print_result "N/A" "1.7.4"  "Ensure GDM screen locks when the user is idle"
+print_result "N/A" "1.7.5"  "Ensure GDM screen locks cannot be overridden"
+print_result "N/A" "1.7.6"  "Ensure GDM automatic mounting of removable media is disabled"
+print_result "N/A" "1.7.7"  "Ensure GDM disabling automatic mounting of removable media is not overridden"
+print_result "N/A" "1.7.8"  "Ensure GDM autorun-never is enabled"
+print_result "N/A" "1.7.9"  "Ensure GDM autorun-never is not overridden"
+print_result "N/A" "1.7.10" "Ensure XDMCP is not enabled"
+
+# ==========================================
+# SECTION 2: SERVICES
+# ==========================================
+echo -e "\n--- Section 2: Services ---"
+
+# --- Funções Técnicas para Serviços ---
+check_unneeded_service() {
+    local pkgs=$1
+    local srvs=$2
+    local id=$3
+    local desc=$4
+
+    local pkg_installed=0
+    for p in $pkgs; do
+        if dpkg-query -s "$p" &>/dev/null; then
+            pkg_installed=1
+        fi
+    done
+
+    # Se o pacote não está instalado, passa.
+    if [ "$pkg_installed" -eq 0 ]; then
+        print_result "PASS" "$id" "$desc"
+        return
+    fi
+
+    # Se estiver instalado, os serviços não podem estar enabled nem active.
+    local srv_fail=0
+    for s in $srvs; do
+        if systemctl is-enabled "$s" 2>/dev/null | grep -q 'enabled'; then
+            srv_fail=1
+        fi
+        if systemctl is-active "$s" 2>/dev/null | grep -q '^active'; then
+            srv_fail=1
+        fi
+    done
+
+    if [ "$srv_fail" -eq 1 ]; then
+        print_result "FAIL" "$id" "$desc"
+    else
+        print_result "PASS" "$id" "$desc"
+    fi
+}
+
+check_client_pkg() {
+    local pkgs=$1
+    local id=$2
+    local desc=$3
+    local pkg_installed=0
+    for p in $pkgs; do
+        if dpkg-query -l | grep -E "^ii\s+$p\s" &>/dev/null; then
+            pkg_installed=1
+        fi
+    done
+
+    if [ "$pkg_installed" -eq 1 ]; then
+        print_result "FAIL" "$id" "$desc"
+    else
+        print_result "PASS" "$id" "$desc"
+    fi
+}
+
+# 2.1 Special Purpose Services
+check_unneeded_service "autofs" "autofs.service" "2.1.1" "Ensure autofs services are not in use"
+check_unneeded_service "avahi-daemon" "avahi-daemon.socket avahi-daemon.service" "2.1.2" "Ensure avahi daemon services are not in use"
+check_unneeded_service "isc-dhcp-server" "isc-dhcp-server.service isc-dhcp-server6.service" "2.1.3" "Ensure dhcp server services are not in use"
+check_unneeded_service "bind9" "named.service" "2.1.4" "Ensure dns server services are not in use"
+check_unneeded_service "dnsmasq" "dnsmasq.service" "2.1.5" "Ensure dnsmasq services are not in use"
+check_unneeded_service "vsftpd" "vsftpd.service" "2.1.6" "Ensure ftp server services are not in use"
+check_unneeded_service "slapd" "slapd.service" "2.1.7" "Ensure ldap server services are not in use"
+check_unneeded_service "dovecot-imapd dovecot-pop3d" "dovecot.socket dovecot.service" "2.1.8" "Ensure message access server services are not in use"
+check_unneeded_service "nfs-kernel-server" "nfs-server.service" "2.1.9" "Ensure network file system services are not in use"
+check_unneeded_service "ypserv" "ypserv.service" "2.1.10" "Ensure nis server services are not in use"
+check_unneeded_service "cups" "cups.socket cups.service" "2.1.11" "Ensure print server services are not in use"
+check_unneeded_service "rpcbind" "rpcbind.socket rpcbind.service" "2.1.12" "Ensure rpcbind services are not in use"
+check_unneeded_service "rsync" "rsync.service" "2.1.13" "Ensure rsync services are not in use"
+check_unneeded_service "samba" "smbd.service" "2.1.14" "Ensure samba file server services are not in use"
+check_unneeded_service "snmpd" "snmpd.service" "2.1.15" "Ensure snmp services are not in use"
+check_unneeded_service "tftpd-hpa" "tftpd-hpa.service" "2.1.16" "Ensure tftp server services are not in use"
+check_unneeded_service "squid" "squid.service" "2.1.17" "Ensure web proxy server services are not in use"
+check_unneeded_service "apache2 nginx" "apache2.socket apache2.service nginx.service" "2.1.18" "Ensure web server services are not in use"
+check_unneeded_service "xinetd" "xinetd.service" "2.1.19" "Ensure xinetd services are not in use"
+check_client_pkg "xserver-common" "2.1.20" "Ensure X window server services are not in use"
+
+# 2.1.21 Ensure mail transfer agent is configured for local-only mode
+if ss -plntu 2>/dev/null | grep -E ':(25|465|587)\b' | grep -Pvq '\s+(127\.0\.0\.1|\[?::1\]?):'; then
+    print_result "FAIL" "2.1.21" "Ensure mail transfer agent is configured for local-only mode"
+else
+    print_result "PASS" "2.1.21" "Ensure mail transfer agent is configured for local-only mode"
+fi
+
+# 2.1.22 Ensure only approved services are listening on a network interface
+print_result "MANUAL" "2.1.22" "Ensure only approved services are listening on a network interface"
+
+# 2.2 Service Clients
+check_client_pkg "nis" "2.2.1" "Ensure NIS Client is not installed"
+check_client_pkg "rsh-client" "2.2.2" "Ensure rsh client is not installed"
+check_client_pkg "talk" "2.2.3" "Ensure talk client is not installed"
+check_client_pkg "telnet inetutils-telnet" "2.2.4" "Ensure telnet client is not installed"
+check_client_pkg "ldap-utils" "2.2.5" "Ensure ldap client is not installed"
+check_client_pkg "ftp tnftp" "2.2.6" "Ensure ftp client is not installed"
+
+# =========================================================================
+# 2.3 Time Synchronization
+# =========================================================================
+
+# 2.3.1.1 Ensure a single time synchronization daemon is in use
+timesyncd_active=0
+chrony_active=0
+if systemctl is-active systemd-timesyncd.service 2>/dev/null | grep -q '^active'; then timesyncd_active=1; fi
+if systemctl is-active chrony.service 2>/dev/null | grep -q '^active'; then chrony_active=1; fi
+
+if [ "$timesyncd_active" -eq 1 ] && [ "$chrony_active" -eq 1 ]; then
+    print_result "FAIL" "2.3.1.1" "Ensure a single time synchronization daemon is in use (Both active)"
+elif [ "$timesyncd_active" -eq 0 ] && [ "$chrony_active" -eq 0 ]; then
+    print_result "FAIL" "2.3.1.1" "Ensure a single time synchronization daemon is in use (None active)"
+else
+    print_result "PASS" "2.3.1.1" "Ensure a single time synchronization daemon is in use"
+fi
+
+# 2.3.2 systemd-timesyncd
+if [ "$timesyncd_active" -eq 1 ]; then
+    print_result "MANUAL" "2.3.2.1" "Ensure systemd-timesyncd configured with authorized timeserver"
+    if systemctl is-enabled systemd-timesyncd.service 2>/dev/null | grep -q 'enabled'; then
+        print_result "PASS" "2.3.2.2" "Ensure systemd-timesyncd is enabled and running"
+    else
+        print_result "FAIL" "2.3.2.2" "Ensure systemd-timesyncd is enabled and running"
+    fi
+else
+    print_result "N/A" "2.3.2.1" "Ensure systemd-timesyncd configured with authorized timeserver"
+    print_result "N/A" "2.3.2.2" "Ensure systemd-timesyncd is enabled and running"
+fi
+
+# 2.3.3 chrony
+if [ "$chrony_active" -eq 1 ]; then
+    print_result "MANUAL" "2.3.3.1" "Ensure chrony is configured with authorized timeserver"
+    if ps -ef | awk '(/[c]hronyd/ && $1!="_chrony") { print $1 }' | grep -q .; then
+        print_result "FAIL" "2.3.3.2" "Ensure chrony is running as user _chrony"
+    else
+        print_result "PASS" "2.3.3.2" "Ensure chrony is running as user _chrony"
+    fi
+    
+    if systemctl is-enabled chrony.service 2>/dev/null | grep -q 'enabled'; then
+        print_result "PASS" "2.3.3.3" "Ensure chrony is enabled and running"
+    else
+        print_result "FAIL" "2.3.3.3" "Ensure chrony is enabled and running"
+    fi
+else
+    print_result "N/A" "2.3.3.1" "Ensure chrony is configured with authorized timeserver"
+    print_result "N/A" "2.3.3.2" "Ensure chrony is running as user _chrony"
+    print_result "N/A" "2.3.3.3" "Ensure chrony is enabled and running"
+fi
+
+# 2.4 Job Schedulers
+# --- Funções Técnicas para Job Schedulers ---
+check_cron_perms() {
+    local file=$1
+    local id=$2
+    local desc=$3
+    local req_perm=$4
+
+    if [ -e "$file" ]; then
+        local perm=$(stat -c "%a" "$file" 2>/dev/null)
+        local uid=$(stat -c "%u" "$file" 2>/dev/null)
+        local gid=$(stat -c "%g" "$file" 2>/dev/null)
+
+        # Validar Owner (root=0), Group (root=0) e permissões (igual ou mais restritivo)
+        if [ "$uid" == "0" ] && [ "$gid" == "0" ] && [ "$perm" -le "$req_perm" ]; then
+             print_result "PASS" "$id" "$desc"
+        else
+             print_result "FAIL" "$id" "$desc (Perm/Owner/Group Invalid)"
+        fi
+    else
+         print_result "FAIL" "$id" "$desc (File not found)"
+    fi
+}
+
+# 2.4.1.1 Ensure cron daemon is enabled and active
+cron_svc=$(systemctl list-unit-files | awk '$1~/^crond?\.service/{print $1}' | head -n 1)
+if [ -n "$cron_svc" ] && systemctl is-enabled "$cron_svc" 2>/dev/null | grep -q 'enabled' && systemctl is-active "$cron_svc" 2>/dev/null | grep -q 'active'; then
+    print_result "PASS" "2.4.1.1" "Ensure cron daemon is enabled and active"
+else
+    print_result "FAIL" "2.4.1.1" "Ensure cron daemon is enabled and active"
+fi
+
+# 2.4.1.2 - 2.4.1.7 Cron Permissions
+check_cron_perms "/etc/crontab" "2.4.1.2" "Ensure permissions on /etc/crontab are configured" "600"
+check_cron_perms "/etc/cron.hourly" "2.4.1.3" "Ensure permissions on /etc/cron.hourly are configured" "700"
+check_cron_perms "/etc/cron.daily" "2.4.1.4" "Ensure permissions on /etc/cron.daily are configured" "700"
+check_cron_perms "/etc/cron.weekly" "2.4.1.5" "Ensure permissions on /etc/cron.weekly are configured" "700"
+check_cron_perms "/etc/cron.monthly" "2.4.1.6" "Ensure permissions on /etc/cron.monthly are configured" "700"
+check_cron_perms "/etc/cron.d" "2.4.1.7" "Ensure permissions on /etc/cron.d are configured" "700"
+
+# 2.4.1.8 Ensure crontab is restricted to authorized users
+if [ -e "/etc/cron.allow" ]; then
+    perm=$(stat -c "%a" /etc/cron.allow 2>/dev/null)
+    owner=$(stat -c "%U" /etc/cron.allow 2>/dev/null)
+    group=$(stat -c "%G" /etc/cron.allow 2>/dev/null)
+    if [ "$perm" -le 640 ] && [ "$owner" == "root" ] && [[ "$group" == "root" || "$group" == "crontab" ]]; then
+        print_result "PASS" "2.4.1.8" "Ensure crontab is restricted to authorized users"
+    else
+        print_result "FAIL" "2.4.1.8" "Ensure crontab is restricted to authorized users (cron.allow invalid)"
+    fi
+elif [ -e "/etc/cron.deny" ]; then
+    # Se o allow nao existe, verifica o deny
+    perm=$(stat -c "%a" /etc/cron.deny 2>/dev/null)
+    owner=$(stat -c "%U" /etc/cron.deny 2>/dev/null)
+    group=$(stat -c "%G" /etc/cron.deny 2>/dev/null)
+    if [ "$perm" -le 640 ] && [ "$owner" == "root" ] && [[ "$group" == "root" || "$group" == "crontab" ]]; then
+        print_result "PASS" "2.4.1.8" "Ensure crontab is restricted to authorized users"
+    else
+        print_result "FAIL" "2.4.1.8" "Ensure crontab is restricted to authorized users (cron.deny invalid)"
+    fi
+else
+    print_result "FAIL" "2.4.1.8" "Ensure crontab is restricted to authorized users (allow/deny missing)"
+fi
+
+# 2.4.2.1 Ensure at is restricted to authorized users
+if [ -e "/etc/at.allow" ]; then
+    perm=$(stat -c "%a" /etc/at.allow 2>/dev/null)
+    owner=$(stat -c "%U" /etc/at.allow 2>/dev/null)
+    group=$(stat -c "%G" /etc/at.allow 2>/dev/null)
+    if [ "$perm" -le 640 ] && [ "$owner" == "root" ] && [[ "$group" == "root" || "$group" == "daemon" ]]; then
+        print_result "PASS" "2.4.2.1" "Ensure at is restricted to authorized users"
+    else
+        print_result "FAIL" "2.4.2.1" "Ensure at is restricted to authorized users (at.allow invalid)"
+    fi
+elif [ -e "/etc/at.deny" ]; then
+    perm=$(stat -c "%a" /etc/at.deny 2>/dev/null)
+    owner=$(stat -c "%U" /etc/at.deny 2>/dev/null)
+    group=$(stat -c "%G" /etc/at.deny 2>/dev/null)
+    if [ "$perm" -le 640 ] && [ "$owner" == "root" ] && [[ "$group" == "root" || "$group" == "daemon" ]]; then
+        print_result "PASS" "2.4.2.1" "Ensure at is restricted to authorized users"
+    else
+        print_result "FAIL" "2.4.2.1" "Ensure at is restricted to authorized users (at.deny invalid)"
+    fi
+else
+    # Audit diz que "Nothing is returned" (ou seja, se o ficheiro não existir, passa porque só root usa by default)
+    print_result "PASS" "2.4.2.1" "Ensure at is restricted to authorized users (No at.deny found)"
+fi
+
+# ==========================================
+# SECTION 3: NETWORK CONFIGURATION
+# ==========================================
+echo -e "\n--- Section 3: Network Configuration ---"
+
+# 3.1 Network Parameters (Host and Router)
+print_result "MANUAL" "3.1.1" "Ensure IPv6 status is identified"
+
+# 3.1.2 Ensure wireless interfaces are disabled
+wireless_fail=0
+# 1. Verifica se existem interfaces ativas
+if [ -n "$(find /sys/class/net/*/ -type d -name wireless 2>/dev/null)" ]; then
+    wireless_fail=1
+fi
+# 2. Se existirem interfaces/módulos wireless listados no sistema, valida se estão desativados
+if command -v nmcli >/dev/null 2>&1; then
+    if nmcli radio all | grep -iq "enabled"; then
+        wireless_fail=1
+    fi
+elif command -v iwconfig >/dev/null 2>&1; then
+    if iwconfig 2>/dev/null | grep -q "IEEE 802.11"; then
+        wireless_fail=1
+    fi
+fi
+
+if [ "$wireless_fail" -eq 1 ]; then
+    print_result "FAIL" "3.1.2" "Ensure wireless interfaces are disabled"
+else
+    print_result "PASS" "3.1.2" "Ensure wireless interfaces are disabled"
+fi
+
+check_unneeded_service "bluez" "bluetooth.service" "3.1.3" "Ensure bluetooth services are not in use"
+
+# 3.2 Network Parameters (Host Only) - Kernel Modules
+check_module "dccp" "3.2.1" "Ensure dccp kernel module is not available"
+check_module "tipc" "3.2.2" "Ensure tipc kernel module is not available"
+check_module "rds"  "3.2.3" "Ensure rds kernel module is not available"
+check_module "sctp" "3.2.4" "Ensure sctp kernel module is not available"
+
+# --- Função Auxiliar para verificar sysctl (Ignora IPv6 se estiver inativo no kernel) ---
+ipv6_disabled=0
+if grep -Pqs '^\h*1\b' /sys/module/ipv6/parameters/disable 2>/dev/null || \
+   ( sysctl net.ipv6.conf.all.disable_ipv6 2>/dev/null | grep -Pqs '1$' && \
+     sysctl net.ipv6.conf.default.disable_ipv6 2>/dev/null | grep -Pqs '1$' ); then
+    ipv6_disabled=1
+fi
+
+check_sysctl_multiple() {
+    local id=$1
+    local desc=$2
+    local expected=$3
+    shift 3
+    local params=("$@")
+    local fail=0
+    local actual_vals=""
+
+    for param in "${params[@]}"; do
+        # Se o parâmetro for de IPv6 e o IPv6 estiver desligado no SO, passa à frente
+        if [[ "$param" == net.ipv6.* ]] && [ "$ipv6_disabled" -eq 1 ]; then
+            continue
+        fi
+
+        local val=$(sysctl -n "$param" 2>/dev/null | tr -d '[:space:]')
+        if [ "$val" != "$expected" ]; then
+            fail=1
+            actual_vals="$actual_vals $param=${val:-N/A}"
+        fi
+    done
+
+    if [ "$fail" -eq 1 ]; then
+        print_result "FAIL" "$id" "$desc (Failed:$actual_vals)"
+    else
+        print_result "PASS" "$id" "$desc"
+    fi
+}
+
+# 3.3 Network Parameters (Sysctl)
+check_sysctl_multiple "3.3.1" "Ensure ip forwarding is disabled" "0" "net.ipv4.ip_forward" "net.ipv6.conf.all.forwarding"
+check_sysctl_multiple "3.3.2" "Ensure packet redirect sending is disabled" "0" "net.ipv4.conf.all.send_redirects" "net.ipv4.conf.default.send_redirects"
+check_sysctl_multiple "3.3.3" "Ensure bogus icmp responses are ignored" "1" "net.ipv4.icmp_ignore_bogus_error_responses"
+check_sysctl_multiple "3.3.4" "Ensure broadcast icmp requests are ignored" "1" "net.ipv4.icmp_echo_ignore_broadcasts"
+check_sysctl_multiple "3.3.5" "Ensure icmp redirects are not accepted" "0" "net.ipv4.conf.all.accept_redirects" "net.ipv4.conf.default.accept_redirects" "net.ipv6.conf.all.accept_redirects" "net.ipv6.conf.default.accept_redirects"
+check_sysctl_multiple "3.3.6" "Ensure secure icmp redirects are not accepted" "0" "net.ipv4.conf.all.secure_redirects" "net.ipv4.conf.default.secure_redirects"
+check_sysctl_multiple "3.3.7" "Ensure reverse path filtering is enabled" "1" "net.ipv4.conf.all.rp_filter" "net.ipv4.conf.default.rp_filter"
+check_sysctl_multiple "3.3.8" "Ensure source routed packets are not accepted" "0" "net.ipv4.conf.all.accept_source_route" "net.ipv4.conf.default.accept_source_route" "net.ipv6.conf.all.accept_source_route" "net.ipv6.conf.default.accept_source_route"
+check_sysctl_multiple "3.3.9" "Ensure suspicious packets are logged" "1" "net.ipv4.conf.all.log_martians" "net.ipv4.conf.default.log_martians"
+check_sysctl_multiple "3.3.10" "Ensure tcp syn cookies is enabled" "1" "net.ipv4.tcp_syncookies"
+check_sysctl_multiple "3.3.11" "Ensure ipv6 router advertisements are not accepted" "0" "net.ipv6.conf.all.accept_ra" "net.ipv6.conf.default.accept_ra"
+
+# =========================================================================
+# SECTION 4: HOST BASED FIREWALL
+# =========================================================================
+echo -e "\n--- Section 4: Host Based Firewall ---"
+
+# 4.1.1 Ensure a single firewall configuration utility is in use
+active_fw=0
+fw_in_use=""
+if systemctl is-active ufw.service 2>/dev/null | grep -q '^active'; then ((active_fw++)); fw_in_use="ufw"; fi
+if systemctl is-active nftables.service 2>/dev/null | grep -q '^active'; then ((active_fw++)); fw_in_use="nftables"; fi
+if systemctl is-active netfilter-persistent.service 2>/dev/null | grep -q '^active'; then ((active_fw++)); fw_in_use="iptables"; fi
+
+if [ "$active_fw" -eq 1 ]; then
+    print_result "PASS" "4.1.1" "Ensure a single firewall configuration utility is in use ($fw_in_use)"
+elif [ "$active_fw" -eq 0 ]; then
+    print_result "FAIL" "4.1.1" "Ensure a single firewall configuration utility is in use (None active)"
+else
+    print_result "FAIL" "4.1.1" "Ensure a single firewall configuration utility is in use (Multiple active!)"
+fi
+
+# ==========================================
+# 4.2 Configure Uncomplicated Firewall (UFW)
+# ==========================================
+if [ "$fw_in_use" == "ufw" ] || [ "$fw_in_use" == "" ]; then
+    
+    # 4.2.1 Ensure ufw is installed
+    if dpkg-query -s ufw &>/dev/null; then
+        print_result "PASS" "4.2.1" "Ensure ufw is installed"
+    else
+        print_result "FAIL" "4.2.1" "Ensure ufw is installed"
+    fi
+
+    # 4.2.2 Ensure iptables-persistent is not installed with ufw
+    if dpkg-query -s iptables-persistent &>/dev/null; then
+        print_result "FAIL" "4.2.2" "Ensure iptables-persistent is not installed with ufw"
+    else
+        print_result "PASS" "4.2.2" "Ensure iptables-persistent is not installed with ufw"
+    fi
+
+    # 4.2.3 Ensure ufw service is enabled
+    if systemctl is-enabled ufw.service 2>/dev/null | grep -q 'enabled' && \
+       systemctl is-active ufw.service 2>/dev/null | grep -q 'active' && \
+       ufw status 2>/dev/null | grep -q 'Status: active'; then
+        print_result "PASS" "4.2.3" "Ensure ufw service is enabled"
+    else
+        print_result "FAIL" "4.2.3" "Ensure ufw service is enabled"
+    fi
+
+    # 4.2.4 Ensure ufw loopback traffic is configured
+    fail_424=0
+    grep -Pq -- '-A ufw-before-input -i lo -j ACCEPT' /etc/ufw/before.rules 2>/dev/null || fail_424=1
+    grep -Pq -- '-A ufw-before-output -o lo -j ACCEPT' /etc/ufw/before.rules 2>/dev/null || fail_424=1
+    ufw status verbose 2>/dev/null | grep -Pq 'DENY IN\s+127\.0\.0\.0/8' || fail_424=1
+    if [ "${ipv6_disabled:-0}" -eq 0 ]; then 
+        ufw status verbose 2>/dev/null | grep -Pq 'DENY IN\s+::1' || fail_424=1
+    fi
+    if [ "$fail_424" -eq 0 ]; then
+        print_result "PASS" "4.2.4" "Ensure ufw loopback traffic is configured"
+    else
+        print_result "FAIL" "4.2.4" "Ensure ufw loopback traffic is configured"
+    fi
+
+    # 4.2.5 Ensure ufw outbound connections are configured
+    print_result "MANUAL" "4.2.5" "Ensure ufw outbound connections are configured"
+
+    # 4.2.6 Ensure ufw firewall rules exist for all open ports
+    print_result "MANUAL" "4.2.6" "Ensure ufw firewall rules exist for all open ports"
+
+    # 4.2.7 Ensure ufw default deny firewall policy
+    if ufw status verbose 2>/dev/null | grep -Pq "^Default:\s+(deny|reject)\s+\(incoming\),\s+(deny|reject)\s+\(outgoing\),\s+(deny|reject|disabled)\s+\(routed\)"; then
+        print_result "PASS" "4.2.7" "Ensure ufw default deny firewall policy"
+    else
+        print_result "FAIL" "4.2.7" "Ensure ufw default deny firewall policy"
+    fi
+
+else
+    print_result "N/A" "4.2.1-4.2.7" "UFW controls (Another firewall is active)"
+fi
+
+# ==========================================
+# 4.3 & 4.4 Configure nftables / iptables
+# ==========================================
+if [ "$fw_in_use" == "nftables" ]; then
+    print_result "MANUAL" "4.3.x" "nftables is the active firewall - manual configuration validation required"
+    print_result "N/A" "4.4.x" "iptables controls (nftables is active)"
+elif [ "$fw_in_use" == "iptables" ]; then
+    print_result "N/A" "4.3.x" "nftables controls (iptables is active)"
+    print_result "MANUAL" "4.4.x" "iptables is the active firewall - manual configuration validation required"
+else
+    # Expansão Nftables (10 controlos)
+    print_result "N/A" "4.3.1" "Ensure nftables is installed"
+    print_result "N/A" "4.3.2" "Ensure ufw is uninstalled or disabled with nftables"
+    print_result "N/A" "4.3.3" "Ensure iptables are flushed with nftables"
+    print_result "N/A" "4.3.4" "Ensure a nftables table exists"
+    print_result "N/A" "4.3.5" "Ensure nftables base chains exist"
+    print_result "N/A" "4.3.6" "Ensure nftables loopback traffic is configured"
+    print_result "N/A" "4.3.7" "Ensure nftables outbound and established connections are configured"
+    print_result "N/A" "4.3.8" "Ensure nftables default deny firewall policy"
+    print_result "N/A" "4.3.9" "Ensure nftables service is enabled"
+    print_result "N/A" "4.3.10" "Ensure nftables rules are permanent"
+
+    # Expansão Iptables (11 controlos)
+    print_result "N/A" "4.4.1.1" "Ensure iptables packages are installed"
+    print_result "N/A" "4.4.1.2" "Ensure nftables is not in use with iptables"
+    print_result "N/A" "4.4.1.3" "Ensure ufw is not in use with iptables"
+    print_result "N/A" "4.4.2.1" "Ensure iptables default deny firewall policy"
+    print_result "N/A" "4.4.2.2" "Ensure iptables loopback traffic is configured"
+    print_result "N/A" "4.4.2.3" "Ensure iptables outbound and established connections are configured"
+    print_result "N/A" "4.4.2.4" "Ensure iptables firewall rules exist for all open ports"
+    print_result "N/A" "4.4.3.1" "Ensure ip6tables default deny firewall policy"
+    print_result "N/A" "4.4.3.2" "Ensure ip6tables loopback traffic is configured"
+    print_result "N/A" "4.4.3.3" "Ensure ip6tables outbound and established connections are configured"
+    print_result "N/A" "4.4.3.4" "Ensure ip6tables firewall rules exist for all open ports"
+fi
+# ==========================================
+# SECTION 5: ACCESS CONTROL (SUDO & PAM BASE)
+# ==========================================
+echo -e "\n--- Section 5: Access Control ---"
+
+# 5.1.1 Ensure permissions on /etc/ssh/sshd_config are configured
+perm_sshd=$(stat -Lc "%a %U %G" /etc/ssh/sshd_config 2>/dev/null)
+if [[ "$perm_sshd" == "600 root root" ]]; then
+    print_result "PASS" "5.1.1" "Ensure permissions on /etc/ssh/sshd_config are configured"
+else
+    print_result "FAIL" "5.1.1" "Ensure permissions on /etc/ssh/sshd_config are configured"
+fi
+
+print_result "MANUAL" "5.1.2" "Ensure permissions on SSH private host key files are configured"
+print_result "MANUAL" "5.1.3" "Ensure permissions on SSH public host key files are configured"
+
+# 5.1.4 Ensure sshd access is configured
+if sshd -T 2>/dev/null | grep -Piq '^\h*(allow|deny)(users|groups)\h+\H+'; then
+    print_result "PASS" "5.1.4" "Ensure sshd access is configured"
+else
+    print_result "FAIL" "5.1.4" "Ensure sshd access is configured"
+fi
+
+# 5.1.5 Ensure sshd Banner is configured
+if sshd -T 2>/dev/null | grep -Piq '^banner\h+\/\H+'; then
+    print_result "PASS" "5.1.5" "Ensure sshd Banner is configured"
+else
+    print_result "FAIL" "5.1.5" "Ensure sshd Banner is configured"
+fi
+
+# 5.1.6 Ensure sshd Ciphers are configured
+if sshd -T 2>/dev/null | grep -Piq '^ciphers\h+.*(3des|blowfish|cast128|aes(128|192|256)-cbc|arcfour|rijndael|chacha20-poly1305@openssh\.com)'; then
+    print_result "FAIL" "5.1.6" "Ensure sshd Ciphers are configured (Weak ciphers found)"
+else
+    print_result "PASS" "5.1.6" "Ensure sshd Ciphers are configured"
+fi
+
+# 5.1.7 Ensure sshd ClientAliveInterval and ClientAliveCountMax are configured
+c_alive=$(sshd -T 2>/dev/null | awk '$1=="clientaliveinterval" {print $2}')
+c_max=$(sshd -T 2>/dev/null | awk '$1=="clientalivecountmax" {print $2}')
+if [[ -n "$c_alive" && "$c_alive" -gt 0 && -n "$c_max" && "$c_max" -gt 0 ]]; then
+    print_result "PASS" "5.1.7" "Ensure sshd ClientAliveInterval and ClientAliveCountMax are configured"
+else
+    print_result "FAIL" "5.1.7" "Ensure sshd ClientAliveInterval and ClientAliveCountMax are configured"
+fi
+
+# 5.1.8 Ensure sshd DisableForwarding is enabled
+if sshd -T 2>/dev/null | grep -iq '^disableforwarding yes'; then
+    print_result "PASS" "5.1.8" "Ensure sshd DisableForwarding is enabled"
+else
+    print_result "FAIL" "5.1.8" "Ensure sshd DisableForwarding is enabled"
+fi
+
+# 5.1.9 Ensure sshd GSSAPIAuthentication is disabled
+if sshd -T 2>/dev/null | grep -iq '^gssapiauthentication no'; then
+    print_result "PASS" "5.1.9" "Ensure sshd GSSAPIAuthentication is disabled"
+else
+    print_result "FAIL" "5.1.9" "Ensure sshd GSSAPIAuthentication is disabled"
+fi
+
+# 5.1.10 Ensure sshd HostbasedAuthentication is disabled
+if sshd -T 2>/dev/null | grep -iq '^hostbasedauthentication no'; then
+    print_result "PASS" "5.1.10" "Ensure sshd HostbasedAuthentication is disabled"
+else
+    print_result "FAIL" "5.1.10" "Ensure sshd HostbasedAuthentication is disabled"
+fi
+
+# 5.1.11 Ensure sshd IgnoreRhosts is enabled
+if sshd -T 2>/dev/null | grep -iq '^ignorerhosts yes'; then
+    print_result "PASS" "5.1.11" "Ensure sshd IgnoreRhosts is enabled"
+else
+    print_result "FAIL" "5.1.11" "Ensure sshd IgnoreRhosts is enabled"
+fi
+
+# 5.1.12 Ensure sshd KexAlgorithms is configured
+if sshd -T 2>/dev/null | grep -Piq '^kexalgorithms\h+.*(diffie-hellman-group1-sha1|diffie-hellman-group14-sha1|diffie-hellman-group-exchange-sha1)'; then
+    print_result "FAIL" "5.1.12" "Ensure sshd KexAlgorithms is configured (Weak KEX found)"
+else
+    print_result "PASS" "5.1.12" "Ensure sshd KexAlgorithms is configured"
+fi
+
+# 5.1.13 Ensure sshd LoginGraceTime is configured
+grace=$(sshd -T 2>/dev/null | awk '$1=="logingracetime" {print $2}')
+if [[ -n "$grace" && "$grace" -ge 1 && "$grace" -le 60 ]]; then
+    print_result "PASS" "5.1.13" "Ensure sshd LoginGraceTime is configured"
+else
+    print_result "FAIL" "5.1.13" "Ensure sshd LoginGraceTime is configured"
+fi
+
+# 5.1.14 Ensure sshd LogLevel is configured
+if sshd -T 2>/dev/null | grep -Piq '^loglevel\h+(VERBOSE|INFO)'; then
+    print_result "PASS" "5.1.14" "Ensure sshd LogLevel is configured"
+else
+    print_result "FAIL" "5.1.14" "Ensure sshd LogLevel is configured"
+fi
+
+# 5.1.15 Ensure sshd MACs are configured
+if sshd -T 2>/dev/null | grep -Piq '^macs\h+.*(hmac-md5|hmac-ripemd160|hmac-sha1-96|umac-64|etm@openssh\.com)'; then
+    print_result "FAIL" "5.1.15" "Ensure sshd MACs are configured (Weak MACs found)"
+else
+    print_result "PASS" "5.1.15" "Ensure sshd MACs are configured"
+fi
+
+# 5.1.16 Ensure sshd MaxAuthTries is configured
+auth_tries=$(sshd -T 2>/dev/null | awk '$1=="maxauthtries" {print $2}')
+if [[ -n "$auth_tries" && "$auth_tries" -le 4 ]]; then
+    print_result "PASS" "5.1.16" "Ensure sshd MaxAuthTries is configured"
+else
+    print_result "FAIL" "5.1.16" "Ensure sshd MaxAuthTries is configured"
+fi
+
+# 5.1.17 Ensure sshd MaxSessions is configured
+max_sess=$(sshd -T 2>/dev/null | awk '$1=="maxsessions" {print $2}')
+if [[ -n "$max_sess" && "$max_sess" -le 10 ]]; then
+    print_result "PASS" "5.1.17" "Ensure sshd MaxSessions is configured"
+else
+    print_result "FAIL" "5.1.17" "Ensure sshd MaxSessions is configured"
+fi
+
+# 5.1.18 Ensure sshd MaxStartups is configured
+if sshd -T 2>/dev/null | awk '$1 ~ /^\s*maxstartups/{split($2, a, ":"); if(a[1] > 10 || a[2] > 30 || a[3] > 60) {exit 1}}'; then
+    print_result "PASS" "5.1.18" "Ensure sshd MaxStartups is configured"
+else
+    print_result "FAIL" "5.1.18" "Ensure sshd MaxStartups is configured"
+fi
+
+# 5.1.19 Ensure sshd PermitEmptyPasswords is disabled
+if sshd -T 2>/dev/null | grep -iq '^permitemptypasswords no'; then
+    print_result "PASS" "5.1.19" "Ensure sshd PermitEmptyPasswords is disabled"
+else
+    print_result "FAIL" "5.1.19" "Ensure sshd PermitEmptyPasswords is disabled"
+fi
+
+# 5.1.20 Ensure sshd PermitRootLogin is disabled
+if sshd -T 2>/dev/null | grep -iq '^permitrootlogin no'; then
+    print_result "PASS" "5.1.20" "Ensure sshd PermitRootLogin is disabled"
+else
+    print_result "FAIL" "5.1.20" "Ensure sshd PermitRootLogin is disabled"
+fi
+
+# 5.1.21 Ensure sshd PermitUserEnvironment is disabled
+if sshd -T 2>/dev/null | grep -iq '^permituserenvironment no'; then
+    print_result "PASS" "5.1.21" "Ensure sshd PermitUserEnvironment is disabled"
+else
+    print_result "FAIL" "5.1.21" "Ensure sshd PermitUserEnvironment is disabled"
+fi
+
+# 5.1.22 Ensure sshd UsePAM is enabled
+if sshd -T 2>/dev/null | grep -iq '^usepam yes'; then
+    print_result "PASS" "5.1.22" "Ensure sshd UsePAM is enabled"
+else
+    print_result "FAIL" "5.1.22" "Ensure sshd UsePAM is enabled"
+fi
+
+# 5.2 Configure sudo
+if dpkg-query -s sudo &>/dev/null || dpkg-query -s sudo-ldap &>/dev/null; then
+    print_result "PASS" "5.2.1" "Ensure sudo is installed"
+else
+    print_result "FAIL" "5.2.1" "Ensure sudo is installed"
+fi
+
+# 5.2.2 Ensure sudo commands use pty
+if grep -rPiq '^\h*Defaults\h+([^#\n\r]+,\h*)?use_pty\b' /etc/sudoers* 2>/dev/null && \
+   ! grep -rPiq '^\h*Defaults\h+([^#\n\r]+,\h*)?!use_pty\b' /etc/sudoers* 2>/dev/null; then
+    print_result "PASS" "5.2.2" "Ensure sudo commands use pty"
+else
+    print_result "FAIL" "5.2.2" "Ensure sudo commands use pty"
+fi
+
+# 5.2.3 Ensure sudo log file exists
+if grep -rPsiq "^\h*Defaults\h+([^#]+,\h*)?logfile\h*=\h*(\"|\')?\H+(\"|\')?(,\h*\H+\h*)*\h*(#.*)?$" /etc/sudoers* 2>/dev/null; then
+    print_result "PASS" "5.2.3" "Ensure sudo log file exists"
+else
+    print_result "FAIL" "5.2.3" "Ensure sudo log file exists"
+fi
+
+# 5.2.4 Ensure users must provide password for privilege escalation
+if grep -rsq "^[^#].*NOPASSWD" /etc/sudoers* 2>/dev/null; then
+    print_result "FAIL" "5.2.4" "Ensure users must provide password for privilege escalation"
+else
+    print_result "PASS" "5.2.4" "Ensure users must provide password for privilege escalation"
+fi
+
+# 5.2.5 Ensure re-authentication for privilege escalation is not disabled globally
+if grep -rsq "^[^#].*\!authenticate" /etc/sudoers* 2>/dev/null; then
+    print_result "FAIL" "5.2.5" "Ensure re-authentication for privilege escalation is not disabled globally"
+else
+    print_result "PASS" "5.2.5" "Ensure re-authentication for privilege escalation is not disabled globally"
+fi
+
+# 5.2.6 Ensure sudo authentication timeout is configured correctly
+timeout_val=$(grep -roP "timestamp_timeout=\K[0-9]*" /etc/sudoers* 2>/dev/null | head -n 1 | cut -d: -f2)
+if [ -z "$timeout_val" ]; then
+    print_result "PASS" "5.2.6" "Ensure sudo authentication timeout is configured correctly (Default 15m)"
+elif [ "$timeout_val" -le 15 ] && [ "$timeout_val" -ge 0 ]; then
+    print_result "PASS" "5.2.6" "Ensure sudo authentication timeout is configured correctly ($timeout_val min)"
+else
+    print_result "FAIL" "5.2.6" "Ensure sudo authentication timeout is configured correctly (Current: ${timeout_val:-No Limit})"
+fi
+
+# 5.2.7 Ensure access to the su command is restricted
+if grep -Piq '^\h*auth\h+(?:required|requisite)\h+pam_wheel\.so\h+(?:[^#\n\r]+\h+)?((?!\2)(use_uid\b|group=\H+\b))\h+(?:[^#\n\r]+\h+)?((?!\1)(use_uid\b|group=\H+\b))(\h+.*)?$' /etc/pam.d/su 2>/dev/null; then
+    su_group=$(grep -Pi '^\h*auth\h+(?:required|requisite)\h+pam_wheel\.so' /etc/pam.d/su | grep -oP 'group=\K\w+')
+    if [ -n "$su_group" ]; then
+        users_in_group=$(grep "^$su_group:" /etc/group | cut -d: -f4)
+        if [ -z "$users_in_group" ]; then
+            print_result "PASS" "5.2.7" "Ensure access to the su command is restricted (Group $su_group is empty)"
+        else
+            print_result "FAIL" "5.2.7" "Ensure access to the su command is restricted (Group $su_group is not empty)"
+        fi
+    else
+        print_result "FAIL" "5.2.7" "Ensure access to the su command is restricted (No group specified)"
+    fi
+else
+    print_result "FAIL" "5.2.7" "Ensure access to the su command is restricted (pam_wheel not configured)"
+fi
+
+# 5.3 Configure PAM
+# 5.3.1.1 Ensure latest version of pam is installed
+pam_rt_ver=$(dpkg-query -W -f='${Version}' libpam-runtime 2>/dev/null)
+if [ -n "$pam_rt_ver" ] && dpkg --compare-versions "$pam_rt_ver" "ge" "1.5.2-6" 2>/dev/null; then
+    print_result "PASS" "5.3.1.1" "Ensure latest version of pam is installed (>= 1.5.2-6)"
+else
+    print_result "FAIL" "5.3.1.1" "Ensure latest version of pam is installed"
+fi
+
+# 5.3.1.2 Ensure libpam-modules is installed
+pam_mod_ver=$(dpkg-query -W -f='${Version}' libpam-modules 2>/dev/null)
+if [ -n "$pam_mod_ver" ] && dpkg --compare-versions "$pam_mod_ver" "ge" "1.5.2-6" 2>/dev/null; then
+    print_result "PASS" "5.3.1.2" "Ensure libpam-modules is installed (>= 1.5.2-6)"
+else
+    print_result "FAIL" "5.3.1.2" "Ensure libpam-modules is installed"
+fi
+
+# 5.3.1.3 Ensure libpam-pwquality is installed
+if dpkg-query -s libpam-pwquality &>/dev/null; then
+    print_result "PASS" "5.3.1.3" "Ensure libpam-pwquality is installed"
+else
+    print_result "FAIL" "5.3.1.3" "Ensure libpam-pwquality is installed"
+fi
+
+# 5.3.2.1 Ensure pam_unix module is enabled
+if grep -Pq '\bpam_unix\.so\b' /etc/pam.d/common-auth 2>/dev/null; then
+    print_result "PASS" "5.3.2.1" "Ensure pam_unix module is enabled"
+else
+    print_result "FAIL" "5.3.2.1" "Ensure pam_unix module is enabled"
+fi
+
+# 5.3.2.2 Ensure pam_faillock module is enabled
+if grep -Pq '\bpam_faillock\.so\b' /etc/pam.d/common-auth 2>/dev/null; then
+    print_result "PASS" "5.3.2.2" "Ensure pam_faillock module is enabled"
+else
+    print_result "FAIL" "5.3.2.2" "Ensure pam_faillock module is enabled"
+fi
+
+# 5.3.2.3 Ensure pam_pwquality module is enabled
+if grep -Pq '\bpam_pwquality\.so\b' /etc/pam.d/common-password 2>/dev/null; then
+    print_result "PASS" "5.3.2.3" "Ensure pam_pwquality module is enabled"
+else
+    print_result "FAIL" "5.3.2.3" "Ensure pam_pwquality module is enabled"
+fi
+
+# 5.3.2.4 Ensure pam_pwhistory module is enabled
+if grep -Pq '\bpam_pwhistory\.so\b' /etc/pam.d/common-password 2>/dev/null; then
+    print_result "PASS" "5.3.2.4" "Ensure pam_pwhistory module is enabled"
+else
+    print_result "FAIL" "5.3.2.4" "Ensure pam_pwhistory module is enabled"
+fi
+
+# ==========================================
+# SECTION 5: ACCESS CONTROL (PAM EXTENDED & USER ACCOUNTS)
+# ==========================================
+
+# 5.3.3.1.1 Ensure password failed attempts lockout is configured
+if grep -Piq '^\h*deny\h*=\h*[1-5]\b' /etc/security/faillock.conf 2>/dev/null && \
+   ! grep -Piq '^\h*auth\h+(requisite|required|sufficient)\h+pam_faillock\.so\h+([^#\n\r]+\h+)?deny\h*=\h*(0|[6-9]|[1-9][0-9]+)\b' /etc/pam.d/common-auth 2>/dev/null; then
+    print_result "PASS" "5.3.3.1.1" "Ensure password failed attempts lockout is configured"
+else
+    print_result "FAIL" "5.3.3.1.1" "Ensure password failed attempts lockout is configured"
+fi
+
+# 5.3.3.1.2 Ensure password unlock time is configured
+if grep -Piq '^\h*unlock_time\h*=\h*(0|9[0-9][0-9]|[1-9][0-9]{3,})\b' /etc/security/faillock.conf 2>/dev/null && \
+   ! grep -Piq '^\h*auth\h+(requisite|required|sufficient)\h+pam_faillock\.so\h+([^#\n\r]+\h+)?unlock_time\h*=\h*([1-9]|[1-9][0-9]|[1-8][0-9][0-9])\b' /etc/pam.d/common-auth 2>/dev/null; then
+    print_result "PASS" "5.3.3.1.2" "Ensure password unlock time is configured"
+else
+    print_result "FAIL" "5.3.3.1.2" "Ensure password unlock time is configured"
+fi
+
+# 5.3.3.1.3 Ensure password failed attempts lockout includes root account
+if grep -Piq '^\h*(even_deny_root|root_unlock_time\h*=\h*([6-9][0-9]|[1-9][0-9]{2,}))\b' /etc/security/faillock.conf 2>/dev/null && \
+   ! grep -Piq '^\h*auth\h+([^#\n\r]+\h+)pam_faillock\.so\h+([^#\n\r]+\h+)?root_unlock_time\h*=\h*([1-9]|[1-5][0-9])\b' /etc/pam.d/common-auth 2>/dev/null; then
+    print_result "PASS" "5.3.3.1.3" "Ensure password failed attempts lockout includes root account"
+else
+    print_result "FAIL" "5.3.3.1.3" "Ensure password failed attempts lockout includes root account"
+fi
+
+# 5.3.3.2.1 Ensure password number of changed characters is configured
+if grep -Psiq '^\h*difok\h*=\h*([2-9]|[1-9][0-9]+)\b' /etc/security/pwquality.conf /etc/security/pwquality.conf.d/*.conf 2>/dev/null && \
+   ! grep -Psiq '^\h*password\h+(requisite|required|sufficient)\h+pam_pwquality\.so\h+([^#\n\r]+\h+)?difok\h*=\h*([0-1])\b' /etc/pam.d/common-password 2>/dev/null; then
+    print_result "PASS" "5.3.3.2.1" "Ensure password number of changed characters is configured"
+else
+    print_result "FAIL" "5.3.3.2.1" "Ensure password number of changed characters is configured"
+fi
+
+# 5.3.3.2.2 Ensure minimum password length is configured
+if grep -Psiq '^\h*minlen\h*=\h*(1[4-9]|[2-9][0-9]|[1-9][0-9]{2,})\b' /etc/security/pwquality.conf /etc/security/pwquality.conf.d/*.conf 2>/dev/null && \
+   ! grep -Psiq '^\h*password\h+(requisite|required|sufficient)\h+pam_pwquality\.so\h+([^#\n\r]+\h+)?minlen\h*=\h*([0-9]|1[0-3])\b' /etc/pam.d/common-password 2>/dev/null; then
+    print_result "PASS" "5.3.3.2.2" "Ensure minimum password length is configured"
+else
+    print_result "FAIL" "5.3.3.2.2" "Ensure minimum password length is configured"
+fi
+
+# 5.3.3.2.3 Ensure password complexity is configured
+print_result "MANUAL" "5.3.3.2.3" "Ensure password complexity is configured (minclass/dcredit/ucredit/lcredit/ocredit)"
+
+# 5.3.3.2.4 Ensure password same consecutive characters is configured
+if grep -Psiq '^\h*maxrepeat\h*=\h*[1-3]\b' /etc/security/pwquality.conf /etc/security/pwquality.conf.d/*.conf 2>/dev/null && \
+   ! grep -Psiq '^\h*password\h+(requisite|required|sufficient)\h+pam_pwquality\.so\h+([^#\n\r]+\h+)?maxrepeat\h*=\h*(0|[4-9]|[1-9][0-9]+)\b' /etc/pam.d/common-password 2>/dev/null; then
+    print_result "PASS" "5.3.3.2.4" "Ensure password same consecutive characters is configured"
+else
+    print_result "FAIL" "5.3.3.2.4" "Ensure password same consecutive characters is configured"
+fi
+
+# 5.3.3.2.5 Ensure password maximum sequential characters is configured
+if grep -Psiq '^\h*maxsequence\h*=\h*[1-3]\b' /etc/security/pwquality.conf /etc/security/pwquality.conf.d/*.conf 2>/dev/null && \
+   ! grep -Psiq '^\h*password\h+(requisite|required|sufficient)\h+pam_pwquality\.so\h+([^#\n\r]+\h+)?maxsequence\h*=\h*(0|[4-9]|[1-9][0-9]+)\b' /etc/pam.d/common-password 2>/dev/null; then
+    print_result "PASS" "5.3.3.2.5" "Ensure password maximum sequential characters is configured"
+else
+    print_result "FAIL" "5.3.3.2.5" "Ensure password maximum sequential characters is configured"
+fi
+
+# 5.3.3.2.6 Ensure password dictionary check is enabled
+if ! grep -Psiq '^\h*dictcheck\h*=\h*0\b' /etc/security/pwquality.conf /etc/security/pwquality.conf.d/*.conf 2>/dev/null && \
+   ! grep -Psiq '^\h*password\h+(requisite|required|sufficient)\h+pam_pwquality\.so\h+([^#\n\r]+\h+)?dictcheck\h*=\h*0\b' /etc/pam.d/common-password 2>/dev/null; then
+    print_result "PASS" "5.3.3.2.6" "Ensure password dictionary check is enabled"
+else
+    print_result "FAIL" "5.3.3.2.6" "Ensure password dictionary check is enabled"
+fi
+
+# 5.3.3.2.7 Ensure password quality checking is enforced
+if ! grep -PHsiq '^\h*enforcing\h*=\h*0\b' /etc/security/pwquality.conf /etc/security/pwquality.conf.d/*.conf 2>/dev/null && \
+   ! grep -PHsiq '^\h*password\h+[^#\n\r]+\h+pam_pwquality\.so\h+([^#\n\r]+\h+)?enforcing=0\b' /etc/pam.d/common-password 2>/dev/null; then
+    print_result "PASS" "5.3.3.2.7" "Ensure password quality checking is enforced"
+else
+    print_result "FAIL" "5.3.3.2.7" "Ensure password quality checking is enforced"
+fi
+
+# 5.3.3.2.8 Ensure password quality is enforced for the root user
+if grep -Psiq '^\h*enforce_for_root\b' /etc/security/pwquality.conf /etc/security/pwquality.conf.d/*.conf 2>/dev/null; then
+    print_result "PASS" "5.3.3.2.8" "Ensure password quality is enforced for the root user"
+else
+    print_result "FAIL" "5.3.3.2.8" "Ensure password quality is enforced for the root user"
+fi
+
+# 5.3.3.3.1 Ensure password history remember is configured
+if grep -Psiq '^\h*password\h+[^#\n\r]+\h+pam_pwhistory\.so\h+([^#\n\r]+\h+)?remember=(2[4-9]|[3-9][0-9]|[1-9][0-9]{2,})\b' /etc/pam.d/common-password 2>/dev/null; then
+    print_result "PASS" "5.3.3.3.1" "Ensure password history remember is configured"
+else
+    print_result "FAIL" "5.3.3.3.1" "Ensure password history remember is configured"
+fi
+
+# 5.3.3.3.2 Ensure password history is enforced for the root user
+if grep -Psiq '^\h*password\h+[^#\n\r]+\h+pam_pwhistory\.so\h+([^#\n\r]+\h+)?enforce_for_root\b' /etc/pam.d/common-password 2>/dev/null; then
+    print_result "PASS" "5.3.3.3.2" "Ensure password history is enforced for the root user"
+else
+    print_result "FAIL" "5.3.3.3.2" "Ensure password history is enforced for the root user"
+fi
+
+# 5.3.3.3.3 Ensure pam_pwhistory includes use_authtok
+if grep -Psiq '^\h*password\h+[^#\n\r]+\h+pam_pwhistory\.so\h+([^#\n\r]+\h+)?use_authtok\b' /etc/pam.d/common-password 2>/dev/null; then
+    print_result "PASS" "5.3.3.3.3" "Ensure pam_pwhistory includes use_authtok"
+else
+    print_result "FAIL" "5.3.3.3.3" "Ensure pam_pwhistory includes use_authtok"
+fi
+
+# 5.3.3.4.1 Ensure pam_unix does not include nullok
+if ! grep -PHsq '^\h*[^#\n\r]+\h+pam_unix\.so\h+([^#\n\r]+\h+)?nullok\b' /etc/pam.d/common-{password,auth,account,session,session-noninteractive} 2>/dev/null; then
+    print_result "PASS" "5.3.3.4.1" "Ensure pam_unix does not include nullok"
+else
+    print_result "FAIL" "5.3.3.4.1" "Ensure pam_unix does not include nullok"
+fi
+
+# 5.3.3.4.2 Ensure pam_unix does not include remember
+if ! grep -PHsq '^\h*[^#\n\r]+\h+pam_unix\.so\h+([^#\n\r]+\h+)?remember=\d+\b' /etc/pam.d/common-{password,auth,account,session,session-noninteractive} 2>/dev/null; then
+    print_result "PASS" "5.3.3.4.2" "Ensure pam_unix does not include remember"
+else
+    print_result "FAIL" "5.3.3.4.2" "Ensure pam_unix does not include remember"
+fi
+
+# 5.3.3.4.3 Ensure pam_unix includes a strong password hashing algorithm
+if grep -PHq '^\h*password\h+([^#\n\r]+)\h+pam_unix\.so\h+([^#\n\r]+\h+)?(sha512|yescrypt)\b' /etc/pam.d/common-password 2>/dev/null; then
+    print_result "PASS" "5.3.3.4.3" "Ensure pam_unix includes a strong password hashing algorithm"
+else
+    print_result "FAIL" "5.3.3.4.3" "Ensure pam_unix includes a strong password hashing algorithm"
+fi
+
+# 5.3.3.4.4 Ensure pam_unix includes use_authtok
+if grep -PHq '^\h*password\h+([^#\n\r]+)\h+pam_unix\.so\h+([^#\n\r]+\h+)?use_authtok\b' /etc/pam.d/common-password 2>/dev/null; then
+    print_result "PASS" "5.3.3.4.4" "Ensure pam_unix includes use_authtok"
+else
+    print_result "FAIL" "5.3.3.4.4" "Ensure pam_unix includes use_authtok"
+fi
+
+# 5.4.1.1 Ensure password expiration is configured
+if grep -Piq '^\h*PASS_MAX_DAYS\h+([1-9]|[1-9][0-9]|[1-2][0-9]{2}|3[0-5][0-9]|36[0-5])\b' /etc/login.defs 2>/dev/null && \
+   [ -z "$(awk -F: '($2~/^\$.+\$/) {if($5 > 365 || $5 < 1)print $1}' /etc/shadow 2>/dev/null)" ]; then
+    print_result "PASS" "5.4.1.1" "Ensure password expiration is configured"
+else
+    print_result "FAIL" "5.4.1.1" "Ensure password expiration is configured"
+fi
+
+# 5.4.1.2 Ensure minimum password days is configured
+if grep -Piq '^\h*PASS_MIN_DAYS\h+([1-9]|[1-9][0-9]+)\b' /etc/login.defs 2>/dev/null && \
+   [ -z "$(awk -F: '($2~/^\$.+\$/) {if($4 < 1)print $1}' /etc/shadow 2>/dev/null)" ]; then
+    print_result "PASS" "5.4.1.2" "Ensure minimum password days is configured"
+else
+    print_result "FAIL" "5.4.1.2" "Ensure minimum password days is configured"
+fi
+
+# 5.4.1.3 Ensure password expiration warning days is configured
+if grep -Piq '^\h*PASS_WARN_AGE\h+([7-9]|[1-9][0-9]+)\b' /etc/login.defs 2>/dev/null && \
+   [ -z "$(awk -F: '($2~/^\$.+\$/) {if($6 < 7)print $1}' /etc/shadow 2>/dev/null)" ]; then
+    print_result "PASS" "5.4.1.3" "Ensure password expiration warning days is configured"
+else
+    print_result "FAIL" "5.4.1.3" "Ensure password expiration warning days is configured"
+fi
+
+# 5.4.1.4 Ensure strong password hashing algorithm is configured
+if grep -Piq '^\h*ENCRYPT_METHOD\h+(SHA512|yescrypt)\b' /etc/login.defs 2>/dev/null; then
+    print_result "PASS" "5.4.1.4" "Ensure strong password hashing algorithm is configured"
+else
+    print_result "FAIL" "5.4.1.4" "Ensure strong password hashing algorithm is configured"
+fi
+
+# 5.4.1.5 Ensure inactive password lock is configured
+inactive_def=$(useradd -D 2>/dev/null | grep -Po '^INACTIVE=\K\d+')
+shadow_fail=$(awk -F: '($2~/^\$.+\$/) {if($7 > 45 || $7 < 0 || $7 == "") print $1}' /etc/shadow 2>/dev/null)
+if [[ -n "$inactive_def" && "$inactive_def" -le 45 && "$inactive_def" -ge 0 ]] && [ -z "$shadow_fail" ]; then
+    print_result "PASS" "5.4.1.5" "Ensure inactive password lock is configured"
+else
+    print_result "FAIL" "5.4.1.5" "Ensure inactive password lock is configured"
+fi
+
+# 5.4.1.6 Ensure all users last password change date is in the past
+print_result "MANUAL" "5.4.1.6" "Ensure all users last password change date is in the past"
+
+# 5.4.2.1 Ensure root is the only UID 0 account
+if [ "$(awk -F: '($3 == 0) { print $1 }' /etc/passwd)" == "root" ]; then
+    print_result "PASS" "5.4.2.1" "Ensure root is the only UID 0 account"
+else
+    print_result "FAIL" "5.4.2.1" "Ensure root is the only UID 0 account"
+fi
+
+# 5.4.2.2 Ensure root is the only GID 0 account
+if [ "$(awk -F: '($1 !~ /^(sync|shutdown|halt|operator)/ && $4=="0") {print $1}' /etc/passwd)" == "root" ]; then
+    print_result "PASS" "5.4.2.2" "Ensure root is the only GID 0 account"
+else
+    print_result "FAIL" "5.4.2.2" "Ensure root is the only GID 0 account"
+fi
+
+# 5.4.2.3 Ensure group root is the only GID 0 group
+if [ "$(awk -F: '$3=="0"{print $1}' /etc/group)" == "root" ]; then
+    print_result "PASS" "5.4.2.3" "Ensure group root is the only GID 0 group"
+else
+    print_result "FAIL" "5.4.2.3" "Ensure group root is the only GID 0 group"
+fi
+
+# 5.4.2.4 Ensure root account access is controlled
+root_status=$(passwd -S root 2>/dev/null | awk '{print $2}')
+if [[ "$root_status" == "P" || "$root_status" == "L" ]]; then
+    print_result "PASS" "5.4.2.4" "Ensure root account access is controlled"
+else
+    print_result "FAIL" "5.4.2.4" "Ensure root account access is controlled"
+fi
+
+# 5.4.2.5 Ensure root path integrity
+print_result "MANUAL" "5.4.2.5" "Ensure root path integrity"
+
+# 5.4.2.6 Ensure root user umask is configured
+if ! grep -Psiq '^\h*umask\h+(([0-7][0-7][01][0-7]\b|[0-7][0-7][0-7][0-6]\b)|([0-7][01][0-7]\b|[0-7][0-7][0-6]\b)|(u=[rwx]{1,3},)?(((g=[rx]?[rx]?w[rx]?[rx]?\b)(,o=[rwx]{1,3})?)|((g=[wrx]{1,3},)?o=[wrx]{1,3}\b)))' /root/.bash_profile /root/.bashrc 2>/dev/null; then
+    print_result "PASS" "5.4.2.6" "Ensure root user umask is configured"
+else
+    print_result "FAIL" "5.4.2.6" "Ensure root user umask is configured"
+fi
+
+# 5.4.2.7 Ensure system accounts do not have a valid login shell
+sys_shells_invalid=$(awk -v pat="^($(awk -F/ '$NF != "nologin" {print}' /etc/shells 2>/dev/null | sed -rn '/^\/{s,\/,\\\\/,g;p}' | paste -s -d '|' - ))$" -F: '($1!~/^(root|halt|sync|shutdown|nfsnobody)$/ && ($3<1000 || $3 == 65534) && $(NF) ~ pat) {print $1}' /etc/passwd 2>/dev/null)
+if [ -z "$sys_shells_invalid" ]; then
+    print_result "PASS" "5.4.2.7" "Ensure system accounts do not have a valid login shell"
+else
+    print_result "FAIL" "5.4.2.7" "Ensure system accounts do not have a valid login shell"
+fi
+
+# 5.4.2.8 Ensure accounts without a valid login shell are locked
+print_result "MANUAL" "5.4.2.8" "Ensure accounts without a valid login shell are locked"
+
+# 5.4.3.1 Ensure nologin is not listed in /etc/shells
+if ! grep -Psq '^\h*([^#\n\r]+)?\/nologin\b' /etc/shells 2>/dev/null; then
+    print_result "PASS" "5.4.3.1" "Ensure nologin is not listed in /etc/shells"
+else
+    print_result "FAIL" "5.4.3.1" "Ensure nologin is not listed in /etc/shells"
+fi
+
+# 5.4.3.2 Ensure default user shell timeout is configured
+if grep -Pq '^\s*([^#]+\s+)?TMOUT=(900|[1-8][0-9][0-9]|[1-9][0-9]|[1-9])\b' /etc/profile /etc/profile.d/*.sh /etc/bash.bashrc 2>/dev/null && \
+   ! grep -Pq '^\s*([^#]+\s+)?TMOUT=(9[0-9][1-9]|9[1-9][0-9]|0+|[1-9]\d{3,})\b' /etc/profile /etc/profile.d/*.sh /etc/bash.bashrc 2>/dev/null; then
+    print_result "PASS" "5.4.3.2" "Ensure default user shell timeout is configured"
+else
+    print_result "FAIL" "5.4.3.2" "Ensure default user shell timeout is configured"
+fi
+
+# 5.4.3.3 Ensure default user umask is configured
+if grep -Psiq '^\h*umask\h+(0?[0-7][2-7]7|u(=[rwx]{0,3}),g=([rx]{0,2}),o=)' /etc/profile.d/*.sh /etc/profile /etc/bash.bashrc /etc/login.defs /etc/default/login 2>/dev/null && \
+   ! grep -Psiq '^\h*umask\h+(([0-7][0-7][01][0-7]\b|[0-7][0-7][0-7][0-6]\b)|([0-7][01][0-7]\b|[0-7][0-7][0-6]\b))' /etc/profile.d/*.sh /etc/profile /etc/bash.bashrc /etc/login.defs /etc/default/login 2>/dev/null; then
+    print_result "PASS" "5.4.3.3" "Ensure default user umask is configured"
+else
+    print_result "FAIL" "5.4.3.3" "Ensure default user umask is configured"
+fi
+
+# ==========================================
+# SECTION 6: LOGGING AND AUDITING (LOGGING & AUDITD BASE)
+# ==========================================
+echo -e "\n--- Section 6: Logging and Auditing ---"
+
+# 6.1.1 Configure journald
+if systemctl is-enabled systemd-journald.service 2>/dev/null | grep -q 'static' && \
+   systemctl is-active systemd-journald.service 2>/dev/null | grep -q 'active'; then
+    print_result "PASS" "6.1.1.1" "Ensure journald service is enabled and active"
+else
+    print_result "FAIL" "6.1.1.1" "Ensure journald service is enabled and active"
+fi
+
+# 6.1.1.2 Ensure journald log file access is configured
+fail_6112=0
+while IFS=: read -r logfile mode user group; do
+    if [ -d "$logfile" ]; then
+        grep -Psq '^(\/run|\/var\/lib\/systemd)\b' <<< "$logfile" && pmask="0022" || pmask="0027"
+    else
+        grep -Psq '^(\/run|\/var\/lib\/systemd)\b' <<< "$logfile" && pmask="0022" || pmask="0137"
+    fi
+    if [ $(( 0$mode & 0$pmask )) -gt 0 ]; then fail_6112=1; fi
+done < <(systemd-analyze cat-config /etc/tmpfiles.d/systemd.conf 2>/dev/null | grep -v '^#' | awk '($1~/^(f|d)$/){print $2 ":" $3 ":" $4 ":" $5}')
+
+if [ "$fail_6112" -eq 0 ]; then
+    print_result "PASS" "6.1.1.2" "Ensure journald log file access is configured"
+else
+    print_result "FAIL" "6.1.1.2" "Ensure journald log file access is configured"
+fi
+
+# 6.1.1.3 Ensure journald log file rotation is configured
+if systemd-analyze cat-config systemd/journald.conf 2>/dev/null | grep -Psq '^\h*SystemMaxUse='; then
+    print_result "PASS" "6.1.1.3" "Ensure journald log file rotation is configured"
+else
+    print_result "FAIL" "6.1.1.3" "Ensure journald log file rotation is configured"
+fi
+
+# 6.1.1.4 Ensure only one logging system is in use
+if systemctl is-active --quiet rsyslog && systemctl is-active --quiet systemd-journald; then
+    print_result "FAIL" "6.1.1.4" "Ensure only one logging system is in use (Both active)"
+else
+    print_result "PASS" "6.1.1.4" "Ensure only one logging system is in use"
+fi
+
+# 6.1.2 Configure journald (if it is the only logging system)
+if systemctl is-active --quiet systemd-journald && ! systemctl is-active --quiet rsyslog; then
+    if systemd-analyze cat-config systemd/journald.conf 2>/dev/null | grep -Psq '^\h*ForwardToSyslog=no\b'; then
+        print_result "PASS" "6.1.2.2" "Ensure journald ForwardToSyslog is disabled"
+    else
+        print_result "FAIL" "6.1.2.2" "Ensure journald ForwardToSyslog is disabled"
+    fi
+
+    if systemd-analyze cat-config systemd/journald.conf 2>/dev/null | grep -Psq '^\h*Compress=yes\b'; then
+        print_result "PASS" "6.1.2.3" "Ensure journald Compress is configured"
+    else
+        print_result "FAIL" "6.1.2.3" "Ensure journald Compress is configured"
+    fi
+
+    if systemd-analyze cat-config systemd/journald.conf 2>/dev/null | grep -Psq '^\h*Storage=persistent\b'; then
+        print_result "PASS" "6.1.2.4" "Ensure journald Storage is configured"
+    else
+        print_result "FAIL" "6.1.2.4" "Ensure journald Storage is configured"
+    fi
+
+    if dpkg-query -s systemd-journal-remote &>/dev/null; then
+        print_result "PASS" "6.1.2.1.1" "Ensure systemd-journal-remote is installed"
+    else
+        print_result "FAIL" "6.1.2.1.1" "Ensure systemd-journal-remote is installed"
+    fi
+
+    print_result "MANUAL" "6.1.2.1.2" "Ensure systemd-journal-upload authentication is configured"
+
+    if systemctl is-enabled systemd-journal-upload.service 2>/dev/null | grep -q 'enabled' && \
+       systemctl is-active systemd-journal-upload.service 2>/dev/null | grep -q 'active'; then
+        print_result "PASS" "6.1.2.1.3" "Ensure systemd-journal-upload is enabled and active"
+    else
+        print_result "FAIL" "6.1.2.1.3" "Ensure systemd-journal-upload is enabled and active"
+    fi
+
+    if ! systemctl is-enabled systemd-journal-remote.socket systemd-journal-remote.service 2>/dev/null | grep -Pq '^enabled' && \
+       ! systemctl is-active systemd-journal-remote.socket systemd-journal-remote.service 2>/dev/null | grep -Pq '^active'; then
+        print_result "PASS" "6.1.2.1.4" "Ensure systemd-journal-remote service is not in use"
+    else
+        print_result "FAIL" "6.1.2.1.4" "Ensure systemd-journal-remote service is not in use"
+    fi
+else
+    print_result "N/A" "6.1.2.x" "Configure journald logging (rsyslog is active)"
+fi
+
+# 6.1.3 Configure rsyslog
+if systemctl is-active --quiet rsyslog; then
+    if dpkg-query -s rsyslog &>/dev/null; then
+        print_result "PASS" "6.1.3.1" "Ensure rsyslog is installed"
+    else
+        print_result "FAIL" "6.1.3.1" "Ensure rsyslog is installed"
+    fi
+
+    if systemctl is-enabled rsyslog.service 2>/dev/null | grep -q 'enabled' && \
+       systemctl is-active rsyslog.service 2>/dev/null | grep -q 'active'; then
+        print_result "PASS" "6.1.3.2" "Ensure rsyslog service is enabled and active"
+    else
+        print_result "FAIL" "6.1.3.2" "Ensure rsyslog service is enabled and active"
+    fi
+
+    if systemd-analyze cat-config systemd/journald.conf 2>/dev/null | grep -Psq '^\h*ForwardToSyslog=yes\b'; then
+        print_result "PASS" "6.1.3.3" "Ensure journald is configured to send logs to rsyslog"
+    else
+        print_result "FAIL" "6.1.3.3" "Ensure journald is configured to send logs to rsyslog"
+    fi
+
+    if systemd-analyze cat-config /etc/rsyslog.conf 2>/dev/null | grep -Psiq '^\h*\$FileCreateMode\h+(0640|0600|0440|0400)\b'; then
+        print_result "PASS" "6.1.3.4" "Ensure rsyslog log file creation mode is configured"
+    else
+        print_result "FAIL" "6.1.3.4" "Ensure rsyslog log file creation mode is configured"
+    fi
+
+    print_result "MANUAL" "6.1.3.5" "Ensure rsyslog logging is configured"
+    print_result "MANUAL" "6.1.3.6" "Ensure rsyslog is configured to send logs to a remote log host"
+
+    fail_6137=0
+    if systemd-analyze cat-config /etc/rsyslog.conf 2>/dev/null | grep -Psiq '^\h*module\(load=\"?imtcp\"?\)'; then fail_6137=1; fi
+    if systemd-analyze cat-config /etc/rsyslog.conf 2>/dev/null | grep -Psiq '^\h*input\(type=\"?imtcp\"?\b'; then fail_6137=1; fi
+    if systemd-analyze cat-config /etc/rsyslog.conf 2>/dev/null | grep -Psiq '^\h*\$ModLoad\h+imtcp\b'; then fail_6137=1; fi
+    if systemd-analyze cat-config /etc/rsyslog.conf 2>/dev/null | grep -Psiq '^\h*\$InputTCPServerRun\b'; then fail_6137=1; fi
+
+    if [ "$fail_6137" -eq 0 ]; then
+        print_result "PASS" "6.1.3.7" "Ensure rsyslog is not configured to receive logs from a remote client"
+    else
+        print_result "FAIL" "6.1.3.7" "Ensure rsyslog is not configured to receive logs from a remote client"
+    fi
+
+    print_result "MANUAL" "6.1.3.8" "Ensure logrotate is configured"
+else
+    print_result "N/A" "6.1.3.1" "Ensure rsyslog is installed"
+    print_result "N/A" "6.1.3.2" "Ensure rsyslog service is enabled and active"
+    print_result "N/A" "6.1.3.3" "Ensure journald is configured to send logs to rsyslog"
+    print_result "N/A" "6.1.3.4" "Ensure rsyslog log file creation mode is configured"
+    print_result "N/A" "6.1.3.5" "Ensure rsyslog logging is configured"
+    print_result "N/A" "6.1.3.6" "Ensure rsyslog is configured to send logs to a remote log host"
+    print_result "N/A" "6.1.3.7" "Ensure rsyslog is not configured to receive logs from a remote client"
+    print_result "N/A" "6.1.3.8" "Ensure logrotate is configured"
+fi
+# 6.1.4.1 Ensure access to all logfiles has been configured
+print_result "MANUAL" "6.1.4.1" "Ensure access to all logfiles has been configured in /var/log"
+
+# 6.2 System Auditing
+if dpkg-query -s auditd &>/dev/null && dpkg-query -s audispd-plugins &>/dev/null; then
+    print_result "PASS" "6.2.1.1" "Ensure auditd packages are installed"
+else
+    print_result "FAIL" "6.2.1.1" "Ensure auditd packages are installed"
+fi
+
+if systemctl is-enabled auditd 2>/dev/null | grep -q 'enabled' && \
+   systemctl is-active auditd 2>/dev/null | grep -q 'active'; then
+    print_result "PASS" "6.2.1.2" "Ensure auditd service is enabled and active"
+else
+    print_result "FAIL" "6.2.1.2" "Ensure auditd service is enabled and active"
+fi
+
+if grep -Ph -- '^\h*linux' /boot/grub/grub.cfg 2>/dev/null | grep -q 'audit=1'; then
+    print_result "PASS" "6.2.1.3" "Ensure auditing for processes that start prior to auditd is enabled"
+else
+    print_result "FAIL" "6.2.1.3" "Ensure auditing for processes that start prior to auditd is enabled"
+fi
+
+if grep -Ph -- '^\h*linux' /boot/grub/grub.cfg 2>/dev/null | grep -Pq 'audit_backlog_limit=\d+\b'; then
+    print_result "PASS" "6.2.1.4" "Ensure audit_backlog_limit is sufficient"
+else
+    print_result "FAIL" "6.2.1.4" "Ensure audit_backlog_limit is sufficient"
+fi
+
+# 6.2.2.1 Ensure audit log storage size is configured
+if grep -Poq '^\h*max_log_file\h*=\h*\d+\b' /etc/audit/auditd.conf 2>/dev/null; then
+    print_result "PASS" "6.2.2.1" "Ensure audit log storage size is configured"
+else
+    print_result "FAIL" "6.2.2.1" "Ensure audit log storage size is configured"
+fi
+
+# 6.2.2.2 Ensure audit logs are not automatically deleted
+if grep -Piq '^\h*max_log_file_action\h*=\h*keep_logs\b' /etc/audit/auditd.conf 2>/dev/null; then
+    print_result "PASS" "6.2.2.2" "Ensure audit logs are not automatically deleted"
+else
+    print_result "FAIL" "6.2.2.2" "Ensure audit logs are not automatically deleted"
+fi
+
+# 6.2.2.3 Ensure system is disabled when audit logs are full
+if grep -Piq '^\h*disk_full_action\h*=\h*(halt|single)\b' /etc/audit/auditd.conf 2>/dev/null && \
+   grep -Piq '^\h*disk_error_action\h*=\h*(syslog|single|halt)\b' /etc/audit/auditd.conf 2>/dev/null; then
+    print_result "PASS" "6.2.2.3" "Ensure system is disabled when audit logs are full"
+else
+    print_result "FAIL" "6.2.2.3" "Ensure system is disabled when audit logs are full"
+fi
+
+# 6.2.2.4 Ensure system warns when audit logs are low on space
+if grep -Pq '^\h*space_left_action\h*=\h*(email|exec|single|halt)\b' /etc/audit/auditd.conf 2>/dev/null && \
+   grep -Pq '^\h*admin_space_left_action\h*=\h*(single|halt)\b' /etc/audit/auditd.conf 2>/dev/null; then
+    print_result "PASS" "6.2.2.4" "Ensure system warns when audit logs are low on space"
+else
+    print_result "FAIL" "6.2.2.4" "Ensure system warns when audit logs are low on space"
+fi
+
+# ==========================================
+# SECTION 6: LOGGING AND AUDITING (AUDITD RULES & AIDE)
+# ==========================================
+
+# --- Função Auxiliar para Regras do Auditd ---
+check_audit_rule() {
+    local search_string=$1
+    local id=$2
+    local desc=$3
+    if grep -Psq -- "$search_string" /etc/audit/rules.d/*.rules 2>/dev/null || \
+       auditctl -l 2>/dev/null | grep -Psq -- "$search_string"; then
+        print_result "PASS" "$id" "$desc"
+    else
+        print_result "FAIL" "$id" "$desc"
+    fi
+}
+
+# 6.2.3 Auditd Rules
+check_audit_rule "scope" "6.2.3.1" "Ensure changes to system administration scope (sudoers) is collected"
+check_audit_rule "user_emulation" "6.2.3.2" "Ensure actions as another user are always logged"
+check_audit_rule "sudo_log_file" "6.2.3.3" "Ensure events that modify the sudo log file are collected"
+check_audit_rule "time-change" "6.2.3.4" "Ensure events that modify date and time information are collected"
+check_audit_rule "system-locale" "6.2.3.5" "Ensure events that modify the system's network environment are collected"
+
+print_result "MANUAL" "6.2.3.6" "Ensure use of privileged commands are collected"
+
+check_audit_rule "access" "6.2.3.7" "Ensure unsuccessful file access attempts are collected"
+check_audit_rule "identity" "6.2.3.8" "Ensure events that modify user/group information are collected"
+check_audit_rule "perm_mod" "6.2.3.9" "Ensure discretionary access control permission modification events are collected"
+check_audit_rule "mounts" "6.2.3.10" "Ensure successful file system mounts are collected"
+check_audit_rule "session" "6.2.3.11" "Ensure session initiation information is collected"
+check_audit_rule "logins" "6.2.3.12" "Ensure login and logout events are collected"
+check_audit_rule "delete" "6.2.3.13" "Ensure file deletion events by users are collected"
+check_audit_rule "MAC-policy" "6.2.3.14" "Ensure events that modify the system's Mandatory Access Controls are collected"
+check_audit_rule "perm_chng.*chcon" "6.2.3.15" "Ensure successful and unsuccessful attempts to use the chcon command are collected"
+check_audit_rule "perm_chng.*setfacl" "6.2.3.16" "Ensure successful and unsuccessful attempts to use the setfacl command are collected"
+check_audit_rule "perm_chng.*chacl" "6.2.3.17" "Ensure successful and unsuccessful attempts to use the chacl command are collected"
+check_audit_rule "usermod" "6.2.3.18" "Ensure successful and unsuccessful attempts to use the usermod command are collected"
+check_audit_rule "kernel_modules" "6.2.3.19" "Ensure kernel module loading unloading and modification is collected"
+
+if grep -Ph -- '^\h*-e\h+2\b' /etc/audit/rules.d/*.rules 2>/dev/null | tail -1 | grep -q "-e 2"; then
+    print_result "PASS" "6.2.3.20" "Ensure the audit configuration is immutable"
+else
+    print_result "FAIL" "6.2.3.20" "Ensure the audit configuration is immutable"
+fi
+
+if augenrules --check 2>/dev/null | grep -q "No change"; then
+    print_result "PASS" "6.2.3.21" "Ensure the running and on disk configuration is the same"
+else
+    print_result "FAIL" "6.2.3.21" "Ensure the running and on disk configuration is the same"
+fi
+
+# 6.2.4 Audit Log and Configuration Files
+audit_log_dir=$(dirname "$(awk -F "=" '/^\s*log_file/ {print $2}' /etc/audit/auditd.conf 2>/dev/null | xargs)" 2>/dev/null)
+if [ -n "$audit_log_dir" ] && [ -d "$audit_log_dir" ]; then
+    if [ -z "$(find "$audit_log_dir" -maxdepth 1 -type f -perm /0137 2>/dev/null)" ]; then
+        print_result "PASS" "6.2.4.1" "Ensure audit log files mode is configured (0640 or tighter)"
+    else
+        print_result "FAIL" "6.2.4.1" "Ensure audit log files mode is configured"
+    fi
+
+    if [ -z "$(find "$audit_log_dir" -maxdepth 1 -type f ! -user root 2>/dev/null)" ]; then
+        print_result "PASS" "6.2.4.2" "Ensure audit log files owner is configured (root)"
+    else
+        print_result "FAIL" "6.2.4.2" "Ensure audit log files owner is configured"
+    fi
+
+    if [ -z "$(find "$audit_log_dir" -maxdepth 1 -type f \( ! -group root -a ! -group adm \) 2>/dev/null)" ]; then
+        print_result "PASS" "6.2.4.3" "Ensure audit log files group owner is configured (root/adm)"
+    else
+        print_result "FAIL" "6.2.4.3" "Ensure audit log files group owner is configured"
+    fi
+
+    dir_mode=$(stat -Lc '%#a' "$audit_log_dir" 2>/dev/null)
+    if [ $(( dir_mode & 0027 )) -eq 0 ]; then
+        print_result "PASS" "6.2.4.4" "Ensure the audit log file directory mode is configured (0750 or tighter)"
+    else
+        print_result "FAIL" "6.2.4.4" "Ensure the audit log file directory mode is configured"
+    fi
+else
+    print_result "FAIL" "6.2.4.1-4" "Audit log files configuration (Directory not found)"
+fi
+
+if [ -z "$(find /etc/audit/ -type f \( -name '*.conf' -o -name '*.rules' \) -perm /0137 2>/dev/null)" ]; then
+    print_result "PASS" "6.2.4.5" "Ensure audit configuration files mode is configured"
+else
+    print_result "FAIL" "6.2.4.5" "Ensure audit configuration files mode is configured"
+fi
+
+if [ -z "$(find /etc/audit/ -type f \( -name '*.conf' -o -name '*.rules' \) ! -user root 2>/dev/null)" ]; then
+    print_result "PASS" "6.2.4.6" "Ensure audit configuration files owner is configured"
+else
+    print_result "FAIL" "6.2.4.6" "Ensure audit configuration files owner is configured"
+fi
+
+if [ -z "$(find /etc/audit/ -type f \( -name '*.conf' -o -name '*.rules' \) ! -group root 2>/dev/null)" ]; then
+    print_result "PASS" "6.2.4.7" "Ensure audit configuration files group owner is configured"
+else
+    print_result "FAIL" "6.2.4.7" "Ensure audit configuration files group owner is configured"
+fi
+
+# 6.2.4.8 - 6.2.4.10 Audit Tools
+fail_tools=0
+for tool in /sbin/auditctl /sbin/aureport /sbin/ausearch /sbin/autrace /sbin/auditd /sbin/augenrules; do
+    if [ -e "$tool" ]; then
+        mode=$(stat -Lc "%a" "$tool" 2>/dev/null)
+        owner=$(stat -Lc "%U" "$tool" 2>/dev/null)
+        group=$(stat -Lc "%G" "$tool" 2>/dev/null)
+        if [ "$mode" != "755" ] && [ "$mode" != "750" ] && [ "$mode" != "700" ]; then fail_tools=1; fi
+        if [ "$owner" != "root" ]; then fail_tools=1; fi
+        if [ "$group" != "root" ]; then fail_tools=1; fi
+    fi
+done
+
+if [ "$fail_tools" -eq 0 ]; then
+    print_result "PASS" "6.2.4.8" "Ensure audit tools mode is configured"
+    print_result "PASS" "6.2.4.9" "Ensure audit tools owner is configured"
+    print_result "PASS" "6.2.4.10" "Ensure audit tools group owner is configured"
+else
+    print_result "FAIL" "6.2.4.8" "Ensure audit tools mode is configured"
+    print_result "FAIL" "6.2.4.9" "Ensure audit tools owner is configured"
+    print_result "FAIL" "6.2.4.10" "Ensure audit tools group owner is configured"
+fi
+
+# 6.3 File Integrity (AIDE)
+if dpkg-query -s aide &>/dev/null && dpkg-query -s aide-common &>/dev/null; then
+    print_result "PASS" "6.3.1" "Ensure AIDE is installed"
+else
+    print_result "FAIL" "6.3.1" "Ensure AIDE is installed"
+fi
+
+if systemctl is-enabled dailyaidecheck.timer 2>/dev/null | grep -q 'enabled'; then
+    print_result "PASS" "6.3.2" "Ensure filesystem integrity is regularly checked"
+else
+    print_result "FAIL" "6.3.2" "Ensure filesystem integrity is regularly checked"
+fi
+
+print_result "MANUAL" "6.3.3" "Ensure cryptographic mechanisms are used to protect the integrity of audit tools"
+
+# ==========================================
+# SECTION 7: SYSTEM MAINTENANCE
+# ==========================================
+echo -e "\n--- Section 7: System Maintenance ---"
+
+# --- Função Auxiliar para Permissões de Ficheiros Críticos ---
+check_file_perms() {
+    local file=$1
+    local id=$2
+    local desc=$3
+    local expected_mode=$4
+
+    if [ -e "$file" ]; then
+        local mode=$(stat -Lc "%a" "$file" 2>/dev/null)
+        local uid=$(stat -Lc "%U" "$file" 2>/dev/null)
+        local gid=$(stat -Lc "%G" "$file" 2>/dev/null)
+
+        local fail=0
+        if [ "$expected_mode" == "644" ]; then
+            if [ "$mode" != "644" ] && [ "$mode" != "600" ] && [ "$mode" != "400" ]; then fail=1; fi
+            if [ "$uid" != "root" ] || [ "$gid" != "root" ]; then fail=1; fi
+        elif [ "$expected_mode" == "640" ]; then
+            if [ "$mode" != "640" ] && [ "$mode" != "600" ] && [ "$mode" != "400" ] && [ "$mode" != "000" ]; then fail=1; fi
+            if [ "$uid" != "root" ]; then fail=1; fi
+            if [ "$gid" != "root" ] && [ "$gid" != "shadow" ]; then fail=1; fi
+        elif [ "$expected_mode" == "600" ]; then
+            if [ "$mode" != "600" ] && [ "$mode" != "400" ] && [ "$mode" != "000" ]; then fail=1; fi
+            if [ "$uid" != "root" ] || [ "$gid" != "root" ]; then fail=1; fi
+        fi
+
+        if [ "$fail" -eq 0 ]; then
+            print_result "PASS" "$id" "$desc"
+        else
+            print_result "FAIL" "$id" "$desc"
+        fi
+    else
+        # Se o ficheiro não existir, não constitui falha de segurança
+        print_result "PASS" "$id" "$desc (File not found)"
+    fi
+}
+
+# 7.1 System File Permissions
+check_file_perms "/etc/passwd" "7.1.1" "Ensure permissions on /etc/passwd are configured" "644"
+check_file_perms "/etc/passwd-" "7.1.2" "Ensure permissions on /etc/passwd- are configured" "644"
+check_file_perms "/etc/group" "7.1.3" "Ensure permissions on /etc/group are configured" "644"
+check_file_perms "/etc/group-" "7.1.4" "Ensure permissions on /etc/group- are configured" "644"
+check_file_perms "/etc/shadow" "7.1.5" "Ensure permissions on /etc/shadow are configured" "640"
+check_file_perms "/etc/shadow-" "7.1.6" "Ensure permissions on /etc/shadow- are configured" "640"
+check_file_perms "/etc/gshadow" "7.1.7" "Ensure permissions on /etc/gshadow are configured" "640"
+check_file_perms "/etc/gshadow-" "7.1.8" "Ensure permissions on /etc/gshadow- are configured" "640"
+check_file_perms "/etc/shells" "7.1.9" "Ensure permissions on /etc/shells are configured" "644"
+check_file_perms "/etc/security/opasswd" "7.1.10" "Ensure permissions on /etc/security/opasswd are configured" "600"
+
+# Os controlos 7.1.11 a 7.1.13 verificam o disco todo (find /). Ficam em MANUAL para o script não demorar 20 minutos a correr.
+print_result "MANUAL" "7.1.11" "Ensure world writable files and directories are secured"
+print_result "MANUAL" "7.1.12" "Ensure no files or directories without an owner and a group exist"
+print_result "MANUAL" "7.1.13" "Ensure SUID and SGID files are reviewed"
+
+# 7.2 User and Group Settings
+if [ -z "$(awk -F: '($2 != "x" ) { print $1 }' /etc/passwd 2>/dev/null)" ]; then
+    print_result "PASS" "7.2.1" "Ensure accounts in /etc/passwd use shadowed passwords"
+else
+    print_result "FAIL" "7.2.1" "Ensure accounts in /etc/passwd use shadowed passwords"
+fi
+
+if [ -z "$(awk -F: '($2 == "" ) { print $1 }' /etc/shadow 2>/dev/null)" ]; then
+    print_result "PASS" "7.2.2" "Ensure /etc/shadow password fields are not empty"
+else
+    print_result "FAIL" "7.2.2" "Ensure /etc/shadow password fields are not empty"
+fi
+
+# 7.2.3 Ensure all groups in /etc/passwd exist in /etc/group (AGORA AUTOMATIZADO)
+if [ -z "$(awk -F: 'NR==FNR{g[$3]=1;next} !g[$4]{print $1}' /etc/group /etc/passwd 2>/dev/null)" ]; then
+    print_result "PASS" "7.2.3" "Ensure all groups in /etc/passwd exist in /etc/group"
+else
+    print_result "FAIL" "7.2.3" "Ensure all groups in /etc/passwd exist in /etc/group"
+fi
+
+shadow_gid=$(getent group shadow | awk -F: '{print $3}')
+if [ -z "$(awk -F: '($1=="shadow") {print $NF}' /etc/group 2>/dev/null)" ] && \
+   [ -z "$(awk -F: '($4 == "'"${shadow_gid:-999999}"'") {print $1}' /etc/passwd 2>/dev/null)" ]; then
+    print_result "PASS" "7.2.4" "Ensure shadow group is empty"
+else
+    print_result "FAIL" "7.2.4" "Ensure shadow group is empty"
+fi
+
+if [ -z "$(cut -f3 -d":" /etc/passwd 2>/dev/null | sort -n | uniq -c | awk '$1 > 1')" ]; then
+    print_result "PASS" "7.2.5" "Ensure no duplicate UIDs exist"
+else
+    print_result "FAIL" "7.2.5" "Ensure no duplicate UIDs exist"
+fi
+
+if [ -z "$(cut -f3 -d":" /etc/group 2>/dev/null | sort -n | uniq -c | awk '$1 > 1')" ]; then
+    print_result "PASS" "7.2.6" "Ensure no duplicate GIDs exist"
+else
+    print_result "FAIL" "7.2.6" "Ensure no duplicate GIDs exist"
+fi
+
+if [ -z "$(cut -f1 -d":" /etc/passwd 2>/dev/null | sort -n | uniq -c | awk '$1 > 1')" ]; then
+    print_result "PASS" "7.2.7" "Ensure no duplicate user names exist"
+else
+    print_result "FAIL" "7.2.7" "Ensure no duplicate user names exist"
+fi
+
+if [ -z "$(cut -f1 -d":" /etc/group 2>/dev/null | sort -n | uniq -c | awk '$1 > 1')" ]; then
+    print_result "PASS" "7.2.8" "Ensure no duplicate group names exist"
+else
+    print_result "FAIL" "7.2.8" "Ensure no duplicate group names exist"
+fi
+
+# 7.2.9 e 7.2.10 envolvem ler dinamicamente os ficheiros /home de todos os users
+print_result "MANUAL" "7.2.9" "Ensure local interactive user home directories are configured"
+print_result "MANUAL" "7.2.10" "Ensure local interactive user dot files access is configured"
+
+# ==========================================
+# FINAL SUMMARY
+# ==========================================
+TOTAL_CONTROLOS=$((PASSED + FAILED + MANUAL))
+
+echo ""
+echo "================================================================="
+echo "   CIS SECURITY AUDIT SUMMARY                                    "
+echo "================================================================="
+echo -e "Controls PASSED (\033[32mPASSED\033[0m)    : $PASSED"
+echo -e "Controls FAILED (\033[31mFAILED\033[0m)    : $FAILED"
+echo -e "Manual/NA Check (\033[33mMANUAL/NA\033[0m) : $MANUAL"
+echo "-----------------------------------------------------------------"
+echo "TOTAL CONTROLS EVALUATED      : $TOTAL_CONTROLOS"
+echo "================================================================="
+echo "Scan complete. Review FAILED items and validate MANUAL/NA controls."
+echo ""
+
+# --- EXPORT TO CSV ---
+# Force reading/writing on the screen (even if you use less)
+exec < /dev/tty
+echo "" > /dev/tty
+read -p "Do you want to export the results to a CSV file? (Y/N): " exportar > /dev/tty
+
+if [[ "$exportar" =~ ^[YySs]$ ]]; then
+    CSV_FILE="/home/fogadmin/relatorio_auditoria.csv"
+    echo "Status;ID;Controlo" > "$CSV_FILE"
+    
+    # Processar o ficheiro temporário e converter para CSV
+    grep "^\[" "$ARQUIVO_TEMP" | while read -r line; do
+        status=$(echo "$line" | grep -o '^\[[^]]*\]' | tr -d '[]')
+        id=$(echo "$line" | awk '{print $3}')
+        desc=$(echo "$line" | cut -d':' -f2- | sed 's/^ *//')
+        echo "$status;$id;\"$desc\"" >> "$CSV_FILE"
+    done
+    
+    echo -e "\n[SUCCESS] Report successfully saved to: $CSV_FILE" > /dev/tty
+else
+    echo -e "\nExport cancelled." > /dev/tty
+fi
+
+# Limpar o lixo temporário
+rm -f "$ARQUIVO_TEMP"
+# -------------------------
