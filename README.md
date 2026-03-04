@@ -98,6 +98,33 @@ The script will generate a *.csv* file in the current directory (e.g., */home/US
 **BONUS:** If you want to copy this CSV file back to your Windows PC to open it in Excel, open a new PowerShell window on your PC and run:
 *scp USERNAME@SERVER_IP:/home/USERNAME/relatorio_auditoria.csv C:\Users\YOUR_WINDOWS_USER\Desktop\*
 
+# Extraction and Analysis of Results (CSV)
+The script allows you to export the audit results to a clean CSV file. To analyze the data correctly on a Windows machine, follow these steps:
+
+**Transfer the file via SCP**
+In your local machine's terminal (Windows PowerShell or Linux/macOS command prompt), use the *scp* command to pull the file. **Do not run this command within the SSH session.**
+
+*#Navegue até à pasta de destino pretendida (ex: Desktop)*
+*cd Desktop*
+
+*#Transfira o ficheiro (substitua o IP pelo endereço do servidor)*
+*scp fogadmin@<IP_DA_VM>:/home/fogadmin/relatorio_auditoria.csv .*
+
+# Open in Microsoft Excel
+To avoid formatting errors (text clustered in the first column):
+
+**1.** Open a new document in Excel.
+
+**2.** Go to **Data -> From Text/CSV.**
+
+**3.** Select the *relatorio_auditoria.csv* file.
+
+**4.** Ensure that the selected **Delimiter** is **Semicolon** (*;*).
+
+**4.** Click **Load**.
+
+The table will be automatically generated with aligned headers, allowing you to easily filter the *[PASSED]*, *[FAILED]*, and *[MANUAL]* statuses.
+
 # Understanding the Control Classifications
 During the audit, you will see colored output in the terminal representing four possible states:
 
