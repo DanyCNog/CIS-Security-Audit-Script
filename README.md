@@ -104,10 +104,10 @@ The script allows you to export the audit results to a clean CSV file. To analyz
 **Transfer the file via SCP**
 In your local machine's terminal (Windows PowerShell or Linux/macOS command prompt), use the *scp* command to pull the file. **Do not run this command within the SSH session.**
 
-*#Navegue até à pasta de destino pretendida (ex: Desktop)*
+*#Navigate to the desired destination folder (e.g., Desktop)*
 *cd Desktop*
 
-*#Transfira o ficheiro (substitua o IP pelo endereço do servidor)*
+*#Download the file (replace the IP with the server address)*
 *scp fogadmin@<IP_DA_VM>:/home/fogadmin/relatorio_auditoria.csv .*
 
 # Open in Microsoft Excel
