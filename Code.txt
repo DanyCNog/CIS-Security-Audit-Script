@@ -1625,20 +1625,23 @@ echo "" > /dev/tty
 read -p "Do you want to export the results to a CSV file? (Y/N): " exportar > /dev/tty
 
 if [[ "$exportar" =~ ^[YySs]$ ]]; then
-    CSV_FILE="/home/fogadmin/relatorio_auditoria.csv"
-    echo "Status;ID;Controlo" > "$CSV_FILE"
-    
-    # Processar o ficheiro temporário e converter para CSV
-    grep "^\[" "$ARQUIVO_TEMP" | while read -r line; do
-        status=$(echo "$line" | grep -o '^\[[^]]*\]' | tr -d '[]')
-        id=$(echo "$line" | awk '{print $3}')
-        desc=$(echo "$line" | cut -d':' -f2- | sed 's/^ *//')
-        echo "$status;$id;\"$desc\"" >> "$CSV_FILE"
-    done
-    
-    echo -e "\n[SUCCESS] Report successfully saved to: $CSV_FILE" > /dev/tty
+        CSV_FILE="/home/fogadmin/relatorio_auditoria.csv"
+        echo "Status;ID;Controlo" > "$CSV_FILE"
+
+        # MÁQUINA DE LAVAR: Limpa as cores do ficheiro temporário ANTES de cortar o texto
+        sed -i 's/\x1b\[[0-9;]*m//g' "$ARQUIVO_TEMP"
+
+        # Processar o ficheiro já limpo
+        grep "^\[" "$ARQUIVO_TEMP" | while read -r line; do
+            status=$(echo "$line" | awk '{print $1}')
+            id=$(echo "$line" | awk '{print $3}')
+            desc=$(echo "$line" | cut -d':' -f2- | sed 's/^ *//')
+            echo "$status;$id;\"$desc\"" >> "$CSV_FILE"
+        done
+
+        echo -e "\n[SUCCESS] Report successfully saved to: $CSV_FILE" > /dev/tty
 else
-    echo -e "\nExport cancelled." > /dev/tty
+        echo -e "\nExport cancelled." > /dev/tty
 fi
 
 # Limpar o lixo temporário
